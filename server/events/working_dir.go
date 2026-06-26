@@ -196,10 +196,10 @@ func (w *FileWorkspace) attemptReuseCloneDir(logger logging.SimpleLogging, c wra
 // clone/merge. Returns true if the working tree was updated (whether by this
 // goroutine or a concurrent one that shared its result).
 //
-// Locking strategy: recheckDiverged runs under the read and ref locks so it
-// can run concurrently with runSteps. The write lock is only acquired by the
-// elected merge leader; concurrent goroutines wait on a done channel instead
-// of queuing on the write lock (which would serialize behind runSteps readers).
+// Locking strategy: the elected merge leader rechecks divergence under the read
+// and ref locks, then acquires the write lock only if a merge is required.
+// Concurrent callers wait on the leader's done channel before taking git locks,
+// which prevents a pileup of serialized divergence rechecks for the same clone.
 func (w *FileWorkspace) MergeAgain(
 	logger logging.SimpleLogging,
 	headRepo models.Repo,
@@ -219,31 +219,33 @@ func (w *FileWorkspace) MergeAgain(
 	}
 	c := wrappedGitContext{cloneDir, headRepo, p}
 
+	// Coordinate parallel goroutines before the divergence recheck. Otherwise each
+	// project goroutine can perform its own remote update/status check before
+	// waiting for the shared merge result.
+	pm := &pendingMerge{done: make(chan struct{})}
+	if actual, loaded := pendingMerges.LoadOrStore(cloneDir, pm); loaded {
+		leader := actual.(*pendingMerge)
+		logger.Debug("Another goroutine is already checking divergence or merging, waiting for it to finish")
+		<-leader.done
+		return leader.merged, leader.err
+	}
+	var gitWriteUnlockFn func()
+	defer func() {
+		close(pm.done)
+		pendingMerges.Delete(cloneDir)
+		if gitWriteUnlockFn != nil {
+			gitWriteUnlockFn()
+		}
+	}()
+
 	if !w.recheckDiverged(logger, p, headRepo, cloneDir) {
 		return false, nil
 	}
 
-	// Coordinate parallel goroutines: only the first to detect divergence acquires
-	// the write lock and performs the merge. Others wait on a done channel instead
-	// of queuing on the write lock (which would serialize behind runSteps read locks).
-	pm := &pendingMerge{done: make(chan struct{})}
-	if actual, loaded := pendingMerges.LoadOrStore(cloneDir, pm); loaded {
-		leader := actual.(*pendingMerge)
-		logger.Debug("Another goroutine is already merging, waiting for it to finish")
-		<-leader.done
-		return leader.merged, leader.err
-	}
-	// Leader: acquire the write lock, then register the broadcast defer.
-	// Defers run LIFO: pending entry closed/deleted first (while the write lock
-	// is still held), then write lock released. This prevents a new caller from
-	// observing and joining a stale completed merge in the window after unlock.
-	gitWriteUnlockFn := w.gitWriteLock(cloneDir)
-	defer gitWriteUnlockFn()
-
-	defer func() {
-		close(pm.done)
-		pendingMerges.Delete(cloneDir)
-	}()
+	// Acquire the write lock only after confirming that the base branch diverged.
+	// The pending entry is closed/deleted before the write lock is released, so a
+	// new caller cannot observe and join a stale completed merge after unlock.
+	gitWriteUnlockFn = w.gitWriteLock(cloneDir)
 
 	logger.Info("base branch may have been updated, using merge strategy and will merge again")
 	pm.merged, pm.err = true, w.mergeAgain(logger, c)

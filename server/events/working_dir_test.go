@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1175,18 +1176,23 @@ func TestMergeAgain_ConcurrentDiverged(t *testing.T) {
 		HeadCommit: prHeadCommit,
 	}
 
+	remoteUpdateCalls := installGitRemoteUpdateCounter(t)
+
 	const n = 5
 	errs := make([]error, n)
 	mergedFlags := make([]bool, n)
+	start := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(n)
 	for i := range n {
 		go func(idx int) {
 			defer wg.Done()
+			<-start
 			logger := logging.NewNoopLogger(t)
 			mergedFlags[idx], errs[idx] = wd.MergeAgain(logger, models.Repo{CloneURL: repoDir}, pullRequest, "default")
 		}(i)
 	}
+	close(start)
 	wg.Wait()
 
 	for _, err := range errs {
@@ -1207,6 +1213,11 @@ func TestMergeAgain_ConcurrentDiverged(t *testing.T) {
 	// the upstream merge was applied to disk.
 	assert.FileExists(t, filepath.Join(workspaceDir, "base-update.txt"))
 	assert.FileExists(t, filepath.Join(workspaceDir, "pr-file.txt"))
+
+	// Concurrent callers should share the divergence recheck as well as the merge.
+	// Without that, each project goroutine performs its own remote update before
+	// waiting for the shared merge result.
+	Equals(t, 1, remoteUpdateCalls())
 }
 
 func TestHasDiverged_MasterHasDiverged(t *testing.T) {
@@ -2524,6 +2535,35 @@ func createPlanFile(t *testing.T, path string) {
 
 	Ok(t, os.MkdirAll(filepath.Dir(path), 0700))
 	Ok(t, os.WriteFile(path, []byte("plan"), 0600))
+}
+
+func installGitRemoteUpdateCounter(t *testing.T) func() int {
+	t.Helper()
+
+	realGit, err := exec.LookPath("git")
+	Ok(t, err)
+
+	wrapperDir := t.TempDir()
+	counterPath := filepath.Join(wrapperDir, "remote-update-count")
+	wrapperPath := filepath.Join(wrapperDir, "git")
+	wrapper := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "remote" ] && [ "$2" = "update" ]; then
+  printf '1\n' >> "%s"
+  sleep 0.2
+fi
+exec "%s" "$@"
+`, counterPath, realGit)
+	Ok(t, os.WriteFile(wrapperPath, []byte(wrapper), 0700))
+	t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	return func() int {
+		content, err := os.ReadFile(counterPath)
+		if os.IsNotExist(err) {
+			return 0
+		}
+		Ok(t, err)
+		return len(strings.Fields(string(content)))
+	}
 }
 
 func ignorePlanFiles(t *testing.T, cloneDir string) {
