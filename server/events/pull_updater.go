@@ -92,5 +92,5 @@ func (c *PullUpdater) updatePull(ctx *command.Context, cmd PullCommand, res comm
 }
 
 func (c *PullUpdater) shouldUpsertNativeResultComment(cmd PullCommand) bool {
-	return c.NativeResultCommentUpsertEnabled && cmd.CommandName() == command.Plan
+	return c.NativeResultCommentUpsertEnabled && cmd.CommandName() == command.Plan && !cmd.IsAutoplan()
 }
