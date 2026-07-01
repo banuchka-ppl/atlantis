@@ -56,6 +56,14 @@ func (d *ClientProxy) CreateComment(logger logging.SimpleLogging, repo models.Re
 	return d.clients[repo.VCSHost.Type].CreateComment(logger, repo, pullNum, comment, command)
 }
 
+func (d *ClientProxy) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+	upserter, ok := d.clients[repo.VCSHost.Type].(NativeResultCommentUpserter)
+	if !ok {
+		return ErrNativeResultCommentUpsertUnsupported
+	}
+	return upserter.UpsertNativeResultComment(logger, repo, pullNum, comment, command, marker)
+}
+
 func (d *ClientProxy) HidePrevCommandComments(logger logging.SimpleLogging, repo models.Repo, pullNum int, command string, dir string) error {
 	return d.clients[repo.VCSHost.Type].HidePrevCommandComments(logger, repo, pullNum, command, dir)
 }

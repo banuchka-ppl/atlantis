@@ -117,6 +117,8 @@ const (
 	MaxCommentsPerCommand            = "max-comments-per-command"
 	ParallelPoolSize                 = "parallel-pool-size"
 	PendingApplyStatusFlag           = "pending-apply-status"
+	PPLXNativeResultCommentMarkers   = "pplx-native-result-comment-markers"
+	PPLXNativeResultCommentUpsert    = "pplx-native-result-comment-upsert"
 	StatsNamespace                   = "stats-namespace"
 	AllowDraftPRs                    = "allow-draft-prs"
 	PortFlag                         = "port"
@@ -588,6 +590,16 @@ var boolFlags = map[string]boolFlag{
 	PendingApplyStatusFlag: {
 		description:  "Set apply job status as pending when there are planned changes that haven't been applied yet. Currently only supported for GitLab.",
 		defaultValue: false,
+	},
+	PPLXNativeResultCommentMarkers: {
+		description:  "Add hidden machine-readable markers to native Atlantis result comments.",
+		defaultValue: false,
+		hidden:       true,
+	},
+	PPLXNativeResultCommentUpsert: {
+		description:  "Update matching native Atlantis result comments instead of creating new comments.",
+		defaultValue: false,
+		hidden:       true,
 	},
 	QuietPolicyChecks: {
 		description:  "Exclude policy check comments from pull requests unless there's an actual error from conftest. This also excludes warnings.",

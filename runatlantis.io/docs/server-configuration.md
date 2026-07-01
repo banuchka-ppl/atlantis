@@ -1140,6 +1140,30 @@ ATLANTIS_PORT=4141
 
 Port to bind to. Defaults to `4141`.
 
+### `--pplx-native-result-comment-markers`
+
+```bash
+atlantis server --pplx-native-result-comment-markers
+# or
+ATLANTIS_PPLX_NATIVE_RESULT_COMMENT_MARKERS=true
+```
+
+Fork-only hidden option that appends an invisible machine-readable marker to native Atlantis result comments. Defaults to `false`.
+
+This only tags comments for later lookup. It does not change comment creation, update, minimization, or splitting behavior by itself.
+
+### `--pplx-native-result-comment-upsert`
+
+```bash
+atlantis server --pplx-native-result-comment-upsert
+# or
+ATLANTIS_PPLX_NATIVE_RESULT_COMMENT_UPSERT=true
+```
+
+Fork-only hidden option that updates an existing marked native Atlantis result comment instead of creating another one for the same logical result slot. Defaults to `false`.
+
+This only applies to native result comments that fit in one GitHub comment. If the result would be split or truncated, Atlantis keeps the existing create-comment behavior and does not add a native result marker for that oversized result.
+
 ### `--quiet-policy-checks` <Badge text="v0.32.0+" type="info"/>
 
 ```bash

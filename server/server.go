@@ -770,9 +770,11 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	}
 
 	pullUpdater := &events.PullUpdater{
-		HidePrevPlanComments: userConfig.HidePrevPlanComments,
-		VCSClient:            vcsClient,
-		MarkdownRenderer:     markdownRenderer,
+		HidePrevPlanComments:              userConfig.HidePrevPlanComments,
+		NativeResultCommentMarkersEnabled: userConfig.PPLXNativeResultCommentMarkers,
+		NativeResultCommentUpsertEnabled:  userConfig.PPLXNativeResultCommentUpsert,
+		VCSClient:                         vcsClient,
+		MarkdownRenderer:                  markdownRenderer,
 	}
 
 	autoMerger := &events.AutoMerger{

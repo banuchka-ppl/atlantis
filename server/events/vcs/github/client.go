@@ -237,6 +237,62 @@ func (g *Client) CreateComment(logger logging.SimpleLogging, repo models.Repo, p
 	return nil
 }
 
+func (g *Client) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+	logger.Debug("Upserting native result comment on GitHub pull request %d", pullNum)
+
+	markedComment := strings.TrimRight(comment, "\n") + "\n\n" + marker
+	comments := common.SplitComment(logger, markedComment, maxCommentLength, g.maxCommentsPerCommand, command)
+	if len(comments) != 1 || comments[0] != markedComment {
+		logger.Debug("native result comment upsert skipped because comment would be split or truncated")
+		return g.CreateComment(logger, repo, pullNum, comment, command)
+	}
+
+	existingComment, err := g.FindNativeResultComment(logger, repo, pullNum, marker)
+	if err != nil {
+		return err
+	}
+	if existingComment == nil {
+		return g.CreateComment(logger, repo, pullNum, markedComment, command)
+	}
+
+	_, resp, err := g.client.Issues.EditComment(g.ctx, repo.Owner, repo.Name, existingComment.GetID(), &github.IssueComment{Body: &markedComment})
+	if resp != nil {
+		logger.Debug("PATCH /repos/%v/%v/issues/comments/%d returned: %v", repo.Owner, repo.Name, existingComment.GetID(), resp.StatusCode)
+	}
+	return err
+}
+
+func (g *Client) FindNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, marker string) (*github.IssueComment, error) {
+	var matchingComment *github.IssueComment
+	nextPage := 0
+	for {
+		comments, resp, err := g.client.Issues.ListComments(g.ctx, repo.Owner, repo.Name, pullNum, &github.IssueListCommentsOptions{
+			Sort:        github.Ptr("created"),
+			Direction:   github.Ptr("asc"),
+			ListOptions: github.ListOptions{Page: nextPage, PerPage: 100},
+		})
+		if resp != nil {
+			logger.Debug("GET /repos/%v/%v/issues/%d/comments returned: %v", repo.Owner, repo.Name, pullNum, resp.StatusCode)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("listing comments: %w", err)
+		}
+		for _, comment := range comments {
+			if comment.User != nil && !strings.EqualFold(comment.User.GetLogin(), g.user) {
+				continue
+			}
+			if strings.Contains(comment.GetBody(), marker) {
+				matchingComment = comment
+			}
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		nextPage = resp.NextPage
+	}
+	return matchingComment, nil
+}
+
 // ReactToComment adds a reaction to a comment.
 func (g *Client) ReactToComment(logger logging.SimpleLogging, repo models.Repo, _ int, commentID int64, reaction string) error {
 	logger.Debug("Adding reaction to GitHub pull request comment %d", commentID)

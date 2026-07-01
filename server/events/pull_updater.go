@@ -4,6 +4,7 @@
 package events
 
 import (
+	"errors"
 	"slices"
 
 	"github.com/runatlantis/atlantis/server/events/command"
@@ -11,9 +12,11 @@ import (
 )
 
 type PullUpdater struct {
-	HidePrevPlanComments bool
-	VCSClient            vcs.Client
-	MarkdownRenderer     *MarkdownRenderer
+	HidePrevPlanComments              bool
+	NativeResultCommentMarkersEnabled bool
+	NativeResultCommentUpsertEnabled  bool
+	VCSClient                         vcs.Client
+	MarkdownRenderer                  *MarkdownRenderer
 }
 
 func (c *PullUpdater) updatePull(ctx *command.Context, cmd PullCommand, res command.Result) {
@@ -52,6 +55,36 @@ func (c *PullUpdater) updatePull(ctx *command.Context, cmd PullCommand, res comm
 	}
 
 	comment := c.MarkdownRenderer.Render(ctx, res, cmd)
+	var marker string
+	if c.NativeResultCommentMarkersEnabled || c.NativeResultCommentUpsertEnabled {
+		var err error
+		marker, err = encodeNativeResultCommentMarker(ctx, cmd)
+		if err != nil {
+			ctx.Log.Err("unable to encode native result comment marker: %s", err)
+		}
+	}
+
+	upsertUnsupported := false
+	if c.NativeResultCommentUpsertEnabled && marker != "" {
+		if upserter, ok := c.VCSClient.(vcs.NativeResultCommentUpserter); ok {
+			err := upserter.UpsertNativeResultComment(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull.Num, comment, cmd.CommandName().String(), marker)
+			if err == nil {
+				return
+			}
+			if errors.Is(err, vcs.ErrNativeResultCommentUpsertUnsupported) {
+				upsertUnsupported = true
+			} else {
+				ctx.Log.Err("unable to upsert native result comment: %s", err)
+			}
+		} else {
+			upsertUnsupported = true
+			ctx.Log.Debug("native result comment upsert unsupported for VCS client")
+		}
+	}
+
+	if marker != "" && (c.NativeResultCommentMarkersEnabled || !upsertUnsupported) {
+		comment = appendNativeResultCommentMarker(comment, marker)
+	}
 	if err := c.VCSClient.CreateComment(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull.Num, comment, cmd.CommandName().String()); err != nil {
 		ctx.Log.Err("unable to comment: %s", err)
 	}
