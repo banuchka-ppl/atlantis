@@ -29,6 +29,7 @@ import (
 // maxCommentLength is the maximum number of chars allowed in a single comment
 // by GitHub.
 const maxCommentLength = 65536
+const pplxInitialCommentMarkerPrefix = "<!-- atlantis-initial-comment:v1 "
 
 var (
 	clientMutationID            = githubv4.NewString("atlantis")
@@ -267,6 +268,7 @@ func (g *Client) UpsertNativeResultComment(logger logging.SimpleLogging, repo mo
 
 func (g *Client) FindNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, marker string) (*github.IssueComment, error) {
 	var matchingComment *github.IssueComment
+	var latestInitialCommentID int64
 	nextPage := 0
 	for {
 		comments, resp, err := g.client.Issues.ListComments(g.ctx, repo.Owner, repo.Name, pullNum, &github.IssueListCommentsOptions{
@@ -284,7 +286,11 @@ func (g *Client) FindNativeResultComment(logger logging.SimpleLogging, repo mode
 			if comment.User != nil && !strings.EqualFold(comment.User.GetLogin(), g.user) {
 				continue
 			}
-			if strings.Contains(comment.GetBody(), marker) {
+			body := comment.GetBody()
+			if strings.Contains(body, pplxInitialCommentMarkerPrefix) {
+				latestInitialCommentID = comment.GetID()
+			}
+			if strings.Contains(body, marker) {
 				matchingComment = comment
 			}
 		}
@@ -292,6 +298,10 @@ func (g *Client) FindNativeResultComment(logger logging.SimpleLogging, repo mode
 			break
 		}
 		nextPage = resp.NextPage
+	}
+	if matchingComment != nil && latestInitialCommentID != 0 && matchingComment.GetID() < latestInitialCommentID {
+		logger.Debug("native result comment upsert skipped because matching result predates latest initial progress comment")
+		return nil, nil
 	}
 	return matchingComment, nil
 }
