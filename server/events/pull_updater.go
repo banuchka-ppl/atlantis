@@ -55,8 +55,9 @@ func (c *PullUpdater) updatePull(ctx *command.Context, cmd PullCommand, res comm
 	}
 
 	comment := c.MarkdownRenderer.Render(ctx, res, cmd)
+	shouldUpsertNativeResult := c.shouldUpsertNativeResultComment(cmd)
 	var marker string
-	if c.NativeResultCommentMarkersEnabled || c.NativeResultCommentUpsertEnabled {
+	if c.NativeResultCommentMarkersEnabled || shouldUpsertNativeResult {
 		var err error
 		marker, err = encodeNativeResultCommentMarker(ctx, cmd)
 		if err != nil {
@@ -65,7 +66,7 @@ func (c *PullUpdater) updatePull(ctx *command.Context, cmd PullCommand, res comm
 	}
 
 	upsertUnsupported := false
-	if c.NativeResultCommentUpsertEnabled && marker != "" {
+	if shouldUpsertNativeResult && marker != "" {
 		if upserter, ok := c.VCSClient.(vcs.NativeResultCommentUpserter); ok {
 			err := upserter.UpsertNativeResultComment(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull.Num, comment, cmd.CommandName().String(), marker)
 			if err == nil {
@@ -88,4 +89,8 @@ func (c *PullUpdater) updatePull(ctx *command.Context, cmd PullCommand, res comm
 	if err := c.VCSClient.CreateComment(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull.Num, comment, cmd.CommandName().String()); err != nil {
 		ctx.Log.Err("unable to comment: %s", err)
 	}
+}
+
+func (c *PullUpdater) shouldUpsertNativeResultComment(cmd PullCommand) bool {
+	return c.NativeResultCommentUpsertEnabled && cmd.CommandName() == command.Plan
 }
