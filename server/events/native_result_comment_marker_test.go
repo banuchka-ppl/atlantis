@@ -131,6 +131,53 @@ func TestPullUpdaterUpsertsNativeResultCommentWhenEnabled(t *testing.T) {
 	Equals(t, "plan", payload.Command)
 }
 
+func TestPullUpdaterDoesNotUpsertNativeApplyResultComment(t *testing.T) {
+	client := &recordingNativeResultCommentClient{}
+	pull := testdata.Pull
+	pull.BaseRepo = testdata.GithubRepo
+	ctx := &command.Context{
+		Pull: pull,
+		Log:  logging.NewNoopLogger(t).WithHistory(),
+	}
+	updater := &PullUpdater{
+		NativeResultCommentMarkersEnabled: true,
+		NativeResultCommentUpsertEnabled:  true,
+		VCSClient:                         client,
+		MarkdownRenderer:                  NewMarkdownRenderer(false, false, false, false, false, false, "", "atlantis", false, false),
+	}
+
+	updater.updatePull(ctx, &CommentCommand{Name: command.Apply}, command.Result{Error: errors.New("boom")})
+
+	Equals(t, 0, client.upsertCalls)
+	Equals(t, 1, client.createCalls)
+	Equals(t, command.Apply.String(), client.createdCommand)
+	Equals(t, true, strings.Contains(client.createdComment, nativeResultCommentMarkerPrefix))
+	payload := decodeNativeResultCommentMarkerForTest(t, client.createdComment)
+	Equals(t, "apply", payload.Command)
+}
+
+func TestPullUpdaterDoesNotMarkNativeApplyResultWhenOnlyUpsertEnabled(t *testing.T) {
+	client := &recordingNativeResultCommentClient{}
+	pull := testdata.Pull
+	pull.BaseRepo = testdata.GithubRepo
+	ctx := &command.Context{
+		Pull: pull,
+		Log:  logging.NewNoopLogger(t).WithHistory(),
+	}
+	updater := &PullUpdater{
+		NativeResultCommentUpsertEnabled: true,
+		VCSClient:                        client,
+		MarkdownRenderer:                 NewMarkdownRenderer(false, false, false, false, false, false, "", "atlantis", false, false),
+	}
+
+	updater.updatePull(ctx, &CommentCommand{Name: command.Apply}, command.Result{Error: errors.New("boom")})
+
+	Equals(t, 0, client.upsertCalls)
+	Equals(t, 1, client.createCalls)
+	Equals(t, command.Apply.String(), client.createdCommand)
+	Equals(t, false, strings.Contains(client.createdComment, nativeResultCommentMarkerPrefix))
+}
+
 func TestPullUpdaterFallsBackToCreateCommentWhenNativeResultUpsertFails(t *testing.T) {
 	client := &recordingNativeResultCommentClient{upsertErr: errors.New("api error")}
 	pull := testdata.Pull
@@ -196,11 +243,13 @@ type recordingNativeResultCommentClient struct {
 	upsertCommand  string
 	upsertMarker   string
 	createdComment string
+	createdCommand string
 }
 
-func (c *recordingNativeResultCommentClient) CreateComment(_ logging.SimpleLogging, _ models.Repo, _ int, comment string, _ string) error {
+func (c *recordingNativeResultCommentClient) CreateComment(_ logging.SimpleLogging, _ models.Repo, _ int, comment string, command string) error {
 	c.createCalls++
 	c.createdComment = comment
+	c.createdCommand = command
 	return nil
 }
 
