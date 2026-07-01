@@ -1647,6 +1647,49 @@ func TestClient_UpsertNativeResultComment_CreatesWhenNoMatch(t *testing.T) {
 	Equals(t, "new body\n\n"+marker, createdBody)
 }
 
+func TestClient_UpsertNativeResultComment_CreatesWhenMatchPredatesProgressComment(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	marker := "<!-- atlantis-native-result:v1:test -->"
+	var createdBody string
+
+	testServer := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, "/api/v3/repos/owner/repo/issues/1/comments"):
+				w.Write([]byte(fmt.Sprintf(`[
+					{"id":123,"body":"old plan\n\n%s","user":{"login":"user"}},
+					{"id":456,"body":":white_check_mark: **Atlantis preparation steps done**\n\n<!-- atlantis-initial-comment:v1 signature=test -->","user":{"login":"user"}}
+				]`, marker))) // nolint: errcheck
+				return
+			case r.Method == http.MethodPost && r.URL.Path == "/api/v3/repos/owner/repo/issues/1/comments":
+				defer r.Body.Close() // nolint: errcheck
+				var requestBody struct {
+					Body string `json:"body"`
+				}
+				Ok(t, json.NewDecoder(r.Body).Decode(&requestBody))
+				createdBody = requestBody.Body
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"id":789}`)) // nolint: errcheck
+				return
+			default:
+				t.Errorf("got unexpected request %s %q", r.Method, r.RequestURI)
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+		}),
+	)
+
+	testServerURL, err := url.Parse(testServer.URL)
+	Ok(t, err)
+	client, err := github.New(testServerURL.Host, &github.UserCredentials{"user", "pass", ""}, github.Config{}, 0, logger)
+	Ok(t, err)
+	defer disableSSLVerification()()
+
+	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
+	Ok(t, err)
+	Equals(t, "new body\n\n"+marker, createdBody)
+}
+
 func TestClient_UpsertNativeResultComment_SkipsMarkedUpsertWhenCommentSplits(t *testing.T) {
 	logger := logging.NewNoopLogger(t)
 	marker := "<!-- atlantis-native-result:v1:test -->"
