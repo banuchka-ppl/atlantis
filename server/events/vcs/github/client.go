@@ -300,7 +300,37 @@ func (g *Client) FindNativeResultComment(logger logging.SimpleLogging, repo mode
 		logger.Debug("native result comment upsert skipped because matching result predates latest initial progress comment")
 		return nil, nil
 	}
+	if matchingComment == nil {
+		return nil, nil
+	}
+
+	isMinimized, err := g.isCommentMinimized(matchingComment.GetNodeID())
+	if err != nil {
+		return nil, fmt.Errorf("checking whether native result comment is minimized: %w", err)
+	}
+	if isMinimized {
+		logger.Debug("native result comment upsert skipped because matching result is minimized")
+		return nil, nil
+	}
 	return matchingComment, nil
+}
+
+func (g *Client) isCommentMinimized(nodeID string) (bool, error) {
+	// GitHub's REST issue-comment response does not expose minimization state.
+	var query struct {
+		Node struct {
+			IssueComment struct {
+				IsMinimized githubv4.Boolean
+			} `graphql:"... on IssueComment"`
+		} `graphql:"node(id: $id)"`
+	}
+	variables := map[string]any{
+		"id": githubv4.ID(nodeID),
+	}
+	if err := g.v4Client.Query(g.ctx, &query, variables); err != nil {
+		return false, err
+	}
+	return bool(query.Node.IssueComment.IsMinimized), nil
 }
 
 // ReactToComment adds a reaction to a comment.

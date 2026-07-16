@@ -1577,7 +1577,10 @@ func TestClient_UpsertNativeResultComment_UpdatesExisting(t *testing.T) {
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, "/api/v3/repos/owner/repo/issues/1/comments"):
-				w.Write([]byte(fmt.Sprintf(`[{"id":123,"body":"old\n\n%s","user":{"login":"user"}}]`, marker))) // nolint: errcheck
+				w.Write([]byte(fmt.Sprintf(`[{"id":123,"node_id":"comment-node-id","body":"old\n\n%s","user":{"login":"user"}}]`, marker))) // nolint: errcheck
+				return
+			case r.Method == http.MethodPost && r.URL.Path == "/api/graphql":
+				w.Write([]byte(`{"data":{"node":{"isMinimized":false}}}`)) // nolint: errcheck
 				return
 			case r.Method == http.MethodPatch && r.URL.Path == "/api/v3/repos/owner/repo/issues/comments/123":
 				defer r.Body.Close() // nolint: errcheck
@@ -1605,6 +1608,49 @@ func TestClient_UpsertNativeResultComment_UpdatesExisting(t *testing.T) {
 	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
 	Ok(t, err)
 	Equals(t, "new body\n\n"+marker, patchedBody)
+}
+
+func TestClient_UpsertNativeResultComment_CreatesWhenMatchIsMinimized(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	marker := "<!-- atlantis-native-result:v1:test -->"
+	var createdBody string
+
+	testServer := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, "/api/v3/repos/owner/repo/issues/1/comments"):
+				w.Write([]byte(fmt.Sprintf(`[{"id":123,"node_id":"comment-node-id","body":"old\n\n%s","user":{"login":"user"}}]`, marker))) // nolint: errcheck
+				return
+			case r.Method == http.MethodPost && r.URL.Path == "/api/graphql":
+				w.Write([]byte(`{"data":{"node":{"isMinimized":true}}}`)) // nolint: errcheck
+				return
+			case r.Method == http.MethodPost && r.URL.Path == "/api/v3/repos/owner/repo/issues/1/comments":
+				defer r.Body.Close() // nolint: errcheck
+				var requestBody struct {
+					Body string `json:"body"`
+				}
+				Ok(t, json.NewDecoder(r.Body).Decode(&requestBody))
+				createdBody = requestBody.Body
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"id":456}`)) // nolint: errcheck
+				return
+			default:
+				t.Errorf("got unexpected request %s %q", r.Method, r.RequestURI)
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+		}),
+	)
+
+	testServerURL, err := url.Parse(testServer.URL)
+	Ok(t, err)
+	client, err := github.New(testServerURL.Host, &github.UserCredentials{"user", "pass", ""}, github.Config{}, 0, logger)
+	Ok(t, err)
+	defer disableSSLVerification()()
+
+	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
+	Ok(t, err)
+	Equals(t, "new body\n\n"+marker, createdBody)
 }
 
 func TestClient_UpsertNativeResultComment_CreatesWhenNoMatch(t *testing.T) {
