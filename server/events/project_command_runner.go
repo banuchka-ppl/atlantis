@@ -19,11 +19,10 @@ import (
 	"github.com/runatlantis/atlantis/server/events/models"
 	"github.com/runatlantis/atlantis/server/events/vcs"
 	"github.com/runatlantis/atlantis/server/events/webhooks"
+	"github.com/runatlantis/atlantis/server/jobs"
 	"github.com/runatlantis/atlantis/server/logging"
 	"github.com/runatlantis/atlantis/server/utils"
 )
-
-const OperationComplete = true
 
 // DirNotExistErr is an error caused by the directory not existing.
 type DirNotExistErr struct {
@@ -169,6 +168,7 @@ type DeferredApplyStatusPublisher interface {
 
 type JobMessageSender interface {
 	Send(ctx command.ProjectContext, msg string, operationComplete bool)
+	Complete(ctx command.ProjectContext, status jobs.JobStatus)
 }
 
 // ProjectOutputWrapper is a decorator that creates a new PR status check per project.
@@ -182,7 +182,7 @@ type ProjectOutputWrapper struct {
 func (p *ProjectOutputWrapper) Plan(ctx command.ProjectContext) command.ProjectCommandOutput {
 	result := p.updateProjectPRStatus(command.Plan, ctx, p.ProjectCommandRunner.Plan)
 	if !ctx.SuppressJobOutput {
-		p.JobMessageSender.Send(ctx, "", OperationComplete)
+		p.JobMessageSender.Complete(ctx, jobStatus(result))
 	}
 	return result
 }
@@ -190,9 +190,16 @@ func (p *ProjectOutputWrapper) Plan(ctx command.ProjectContext) command.ProjectC
 func (p *ProjectOutputWrapper) Apply(ctx command.ProjectContext) command.ProjectCommandOutput {
 	result := p.updateProjectPRStatus(command.Apply, ctx, p.ProjectCommandRunner.Apply)
 	if !ctx.SuppressJobOutput {
-		p.JobMessageSender.Send(ctx, "", OperationComplete)
+		p.JobMessageSender.Complete(ctx, jobStatus(result))
 	}
 	return result
+}
+
+func jobStatus(result command.ProjectCommandOutput) jobs.JobStatus {
+	if result.Error != nil || result.Failure != "" {
+		return jobs.JobStatusFailed
+	}
+	return jobs.JobStatusSucceeded
 }
 
 func (p *ProjectOutputWrapper) updateProjectPRStatus(commandName command.Name, ctx command.ProjectContext, execute func(ctx command.ProjectContext) command.ProjectCommandOutput) command.ProjectCommandOutput {
