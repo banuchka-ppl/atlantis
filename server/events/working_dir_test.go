@@ -2580,7 +2580,7 @@ if [ "$1" = "remote" ] && [ "$2" = "update" ]; then
 fi
 exec "%s" "$@"
 `, counterPath, realGit)
-	Ok(t, os.WriteFile(wrapperPath, []byte(wrapper), 0700))
+	Ok(t, os.WriteFile(wrapperPath, []byte(wrapper), 0700)) // #nosec G306
 	t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	return func() int {
