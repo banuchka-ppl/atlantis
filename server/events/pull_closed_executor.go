@@ -6,6 +6,7 @@ package events
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -91,16 +92,20 @@ func (p *PullClosedExecutor) CleanUpPull(logger logging.SimpleLogging, repo mode
 		}
 	}
 
+	var cleanupErrs []error
 	if err := p.WorkingDir.Delete(logger, repo, pull); err != nil {
-		return fmt.Errorf("cleaning workspace: %w", err)
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("cleaning workspace: %w", err))
 	}
 
-	// Finally, delete locks. We do this last because when someone
-	// unlocks a project, right now we don't actually delete the plan
-	// so we might have plans laying around but no locks.
+	// Attempt workspace cleanup before deleting locks so plans are normally
+	// removed first. Still unlock after a workspace error so a closed pull
+	// cannot leave stale project locks behind.
 	locks, err := p.Locker.UnlockByPull(repo.FullName, pull.Num)
 	if err != nil {
-		return fmt.Errorf("cleaning up locks: %w", err)
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("cleaning up locks: %w", err))
+	}
+	if len(cleanupErrs) != 0 {
+		return errors.Join(cleanupErrs...)
 	}
 
 	// Delete pull from DB.
