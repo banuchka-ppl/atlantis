@@ -19,11 +19,10 @@ import (
 	"github.com/runatlantis/atlantis/server/events/models"
 	"github.com/runatlantis/atlantis/server/events/vcs"
 	"github.com/runatlantis/atlantis/server/events/webhooks"
+	"github.com/runatlantis/atlantis/server/jobs"
 	"github.com/runatlantis/atlantis/server/logging"
 	"github.com/runatlantis/atlantis/server/utils"
 )
-
-const OperationComplete = true
 
 // DirNotExistErr is an error caused by the directory not existing.
 type DirNotExistErr struct {
@@ -169,6 +168,7 @@ type DeferredApplyStatusPublisher interface {
 
 type JobMessageSender interface {
 	Send(ctx command.ProjectContext, msg string, operationComplete bool)
+	Complete(ctx command.ProjectContext, status jobs.JobStatus)
 }
 
 // ProjectOutputWrapper is a decorator that creates a new PR status check per project.
@@ -182,7 +182,7 @@ type ProjectOutputWrapper struct {
 func (p *ProjectOutputWrapper) Plan(ctx command.ProjectContext) command.ProjectCommandOutput {
 	result := p.updateProjectPRStatus(command.Plan, ctx, p.ProjectCommandRunner.Plan)
 	if !ctx.SuppressJobOutput {
-		p.JobMessageSender.Send(ctx, "", OperationComplete)
+		p.JobMessageSender.Complete(ctx, jobStatus(result))
 	}
 	return result
 }
@@ -190,9 +190,16 @@ func (p *ProjectOutputWrapper) Plan(ctx command.ProjectContext) command.ProjectC
 func (p *ProjectOutputWrapper) Apply(ctx command.ProjectContext) command.ProjectCommandOutput {
 	result := p.updateProjectPRStatus(command.Apply, ctx, p.ProjectCommandRunner.Apply)
 	if !ctx.SuppressJobOutput {
-		p.JobMessageSender.Send(ctx, "", OperationComplete)
+		p.JobMessageSender.Complete(ctx, jobStatus(result))
 	}
 	return result
+}
+
+func jobStatus(result command.ProjectCommandOutput) jobs.JobStatus {
+	if result.Error != nil || result.Failure != "" {
+		return jobs.JobStatusFailed
+	}
+	return jobs.JobStatusSucceeded
 }
 
 func (p *ProjectOutputWrapper) updateProjectPRStatus(commandName command.Name, ctx command.ProjectContext, execute func(ctx command.ProjectContext) command.ProjectCommandOutput) command.ProjectCommandOutput {
@@ -346,11 +353,17 @@ type DefaultProjectCommandRunner struct {
 
 // Plan runs terraform plan for the project described by ctx.
 func (p *DefaultProjectCommandRunner) Plan(ctx command.ProjectContext) command.ProjectCommandOutput {
-	planSuccess, failure, err := p.doPlan(ctx)
+	planSuccess, failure, blockingPullNum, err := p.doPlan(ctx)
+	failureReason := command.ProjectFailureReason("")
+	if blockingPullNum != 0 {
+		failureReason = command.ProjectLockFailureReason
+	}
 	return command.ProjectCommandOutput{
-		PlanSuccess: planSuccess,
-		Error:       err,
-		Failure:     failure,
+		PlanSuccess:     planSuccess,
+		Error:           err,
+		Failure:         failure,
+		FailureReason:   failureReason,
+		BlockingPullNum: blockingPullNum,
 	}
 }
 
@@ -779,14 +792,14 @@ func (p *DefaultProjectCommandRunner) doPolicyCheck(ctx command.ProjectContext) 
 	return result, failure, nil
 }
 
-func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*models.PlanSuccess, string, error) {
+func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*models.PlanSuccess, string, int, error) {
 	// Acquire Atlantis lock for this repo/dir/workspace.
 	lockAttempt, err := p.Locker.TryLock(ctx.Log, ctx.Pull, ctx.User, ctx.Workspace, models.NewProject(ctx.Pull.BaseRepo.FullName, ctx.RepoRelDir, ctx.ProjectName), ctx.RepoLocksMode == valid.RepoLocksOnPlanMode)
 	if err != nil {
-		return nil, "", fmt.Errorf("acquiring lock: %w", err)
+		return nil, "", 0, fmt.Errorf("acquiring lock: %w", err)
 	}
 	if !lockAttempt.LockAcquired {
-		return nil, lockAttempt.LockFailureReason, nil
+		return nil, lockAttempt.LockFailureReason, lockAttempt.BlockingPullNum, nil
 	}
 	ctx.Log.Debug("acquired lock for project")
 
@@ -796,7 +809,7 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 		if unlockErr := lockAttempt.UnlockFn(); unlockErr != nil {
 			ctx.Log.Err("error unlocking state after plan error: %v", unlockErr)
 		}
-		return nil, "", err
+		return nil, "", 0, err
 	}
 	defer unlockFn()
 
@@ -806,7 +819,7 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 		if unlockErr := lockAttempt.UnlockFn(); unlockErr != nil {
 			ctx.Log.Err("error unlocking state after plan error: %v", unlockErr)
 		}
-		return nil, "", err
+		return nil, "", 0, err
 	}
 
 	mergedAgain, err := p.WorkingDir.MergeAgain(ctx.Log, ctx.HeadRepo, ctx.Pull, ctx.Workspace)
@@ -814,7 +827,7 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 		if unlockErr := lockAttempt.UnlockFn(); unlockErr != nil {
 			ctx.Log.Err("error unlocking state after plan error: %v", unlockErr)
 		}
-		return nil, "", err
+		return nil, "", 0, err
 	}
 
 	projAbsPath := filepath.Join(repoDir, ctx.RepoRelDir)
@@ -822,13 +835,13 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 		if unlockErr := lockAttempt.UnlockFn(); unlockErr != nil {
 			ctx.Log.Err("error unlocking state after plan error: %v", unlockErr)
 		}
-		return nil, "", fmt.Errorf("project path traversal detected: %w", err)
+		return nil, "", 0, fmt.Errorf("project path traversal detected: %w", err)
 	}
 	if _, err = os.Stat(projAbsPath); os.IsNotExist(err) {
 		if unlockErr := lockAttempt.UnlockFn(); unlockErr != nil {
 			ctx.Log.Err("error unlocking state after plan error: %v", unlockErr)
 		}
-		return nil, "", DirNotExistErr{RepoRelDir: ctx.RepoRelDir}
+		return nil, "", 0, DirNotExistErr{RepoRelDir: ctx.RepoRelDir}
 	}
 
 	// Validate requirements after refreshing the merge checkout so project path
@@ -837,12 +850,12 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 	if failure != "" || err != nil {
 		if deleteErr := p.WorkingDir.DeletePlan(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull, ctx.Workspace, ctx.RepoRelDir, ctx.ProjectName); deleteErr != nil {
 			ctx.Log.Err("error deleting stale plan after plan validation failure: %v", deleteErr)
-			return nil, failure, fmt.Errorf("deleting stale plan after plan validation failure: %w", deleteErr)
+			return nil, failure, 0, fmt.Errorf("deleting stale plan after plan validation failure: %w", deleteErr)
 		}
 		if unlockErr := lockAttempt.UnlockFn(); unlockErr != nil {
 			ctx.Log.Err("error unlocking state after plan error: %v", unlockErr)
 		}
-		return nil, failure, err
+		return nil, failure, 0, err
 	}
 
 	outputs, err := p.runSteps(ctx.Steps, ctx, projAbsPath)
@@ -851,7 +864,7 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 		if unlockErr := lockAttempt.UnlockFn(); unlockErr != nil {
 			ctx.Log.Err("error unlocking state after plan error: %v", unlockErr)
 		}
-		return nil, "", errorWithStepOutput(err, outputs)
+		return nil, "", 0, errorWithStepOutput(err, outputs)
 	}
 
 	return &models.PlanSuccess{
@@ -860,7 +873,7 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 		RePlanCmd:       ctx.RePlanCmd,
 		ApplyCmd:        ctx.ApplyCmd,
 		MergedAgain:     mergedAgain,
-	}, "", nil
+	}, "", 0, nil
 }
 
 func (p *DefaultProjectCommandRunner) doApply(ctx command.ProjectContext) (applyOut string, applyURL string, failure string, err error) {

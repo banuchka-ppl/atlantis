@@ -14,7 +14,29 @@ import (
 
 type OutputBuffer struct {
 	OperationComplete bool
+	Status            JobStatus
 	Buffer            []string
+}
+
+type JobStatus string
+
+const (
+	JobStatusFinished  JobStatus = "finished"
+	JobStatusSucceeded JobStatus = "succeeded"
+	JobStatusFailed    JobStatus = "failed"
+)
+
+type ProjectOutputEventType string
+
+const (
+	ProjectOutputEventOutput   ProjectOutputEventType = "output"
+	ProjectOutputEventComplete ProjectOutputEventType = "complete"
+)
+
+type ProjectOutputEvent struct {
+	Type   ProjectOutputEventType `json:"type"`
+	Data   string                 `json:"data,omitempty"`
+	Status JobStatus              `json:"status,omitempty"`
 }
 
 type PullInfo struct {
@@ -52,6 +74,7 @@ type ProjectCmdOutputLine struct {
 	JobInfo           JobInfo
 	Line              string
 	OperationComplete bool
+	Status            JobStatus
 }
 
 // AsyncProjectCommandOutputHandler is a handler to transport terraform client
@@ -62,7 +85,7 @@ type AsyncProjectCommandOutputHandler struct {
 	projectOutputBuffers     map[string]OutputBuffer
 	projectOutputBuffersLock sync.RWMutex
 
-	receiverBuffers     map[string]map[chan string]bool
+	receiverBuffers     map[string]map[chan ProjectOutputEvent]bool
 	receiverBuffersLock sync.RWMutex
 
 	logger logging.SimpleLogging
@@ -77,14 +100,16 @@ type ProjectCommandOutputHandler interface {
 	// Send will enqueue the msg and wait for Handle() to receive the message.
 	Send(ctx command.ProjectContext, msg string, operationComplete bool)
 
+	Complete(ctx command.ProjectContext, status JobStatus)
+
 	SendWorkflowHook(ctx models.WorkflowHookCommandContext, msg string, operationComplete bool)
 
 	// Register registers a channel and blocks until it is caught up. Callers should call this asynchronously when attempting
 	// to read the channel in the same goroutine
-	Register(jobID string, receiver chan string)
+	Register(jobID string, receiver chan ProjectOutputEvent)
 
 	// Deregister removes a channel from successive updates and closes it.
-	Deregister(jobID string, receiver chan string)
+	Deregister(jobID string, receiver chan ProjectOutputEvent)
 
 	IsKeyExists(key string) bool
 
@@ -105,7 +130,7 @@ func NewAsyncProjectCommandOutputHandler(
 	return &AsyncProjectCommandOutputHandler{
 		projectCmdOutput:     projectCmdOutput,
 		logger:               logger,
-		receiverBuffers:      map[string]map[chan string]bool{},
+		receiverBuffers:      map[string]map[chan ProjectOutputEvent]bool{},
 		projectOutputBuffers: map[string]OutputBuffer{},
 		pullToJobMapping:     sync.Map{},
 	}
@@ -142,6 +167,10 @@ func (p *AsyncProjectCommandOutputHandler) IsKeyExists(key string) bool {
 }
 
 func (p *AsyncProjectCommandOutputHandler) Send(ctx command.ProjectContext, msg string, operationComplete bool) {
+	status := JobStatus("")
+	if operationComplete {
+		status = JobStatusFinished
+	}
 	p.projectCmdOutput <- &ProjectCmdOutputLine{
 		JobID: ctx.JobID,
 		JobInfo: JobInfo{
@@ -158,10 +187,23 @@ func (p *AsyncProjectCommandOutputHandler) Send(ctx command.ProjectContext, msg 
 		},
 		Line:              msg,
 		OperationComplete: operationComplete,
+		Status:            status,
+	}
+}
+
+func (p *AsyncProjectCommandOutputHandler) Complete(ctx command.ProjectContext, status JobStatus) {
+	p.projectCmdOutput <- &ProjectCmdOutputLine{
+		JobID:             ctx.JobID,
+		OperationComplete: true,
+		Status:            status,
 	}
 }
 
 func (p *AsyncProjectCommandOutputHandler) SendWorkflowHook(ctx models.WorkflowHookCommandContext, msg string, operationComplete bool) {
+	status := JobStatus("")
+	if operationComplete {
+		status = JobStatusFinished
+	}
 	p.projectCmdOutput <- &ProjectCmdOutputLine{
 		JobID: ctx.HookID,
 		JobInfo: JobInfo{
@@ -176,17 +218,18 @@ func (p *AsyncProjectCommandOutputHandler) SendWorkflowHook(ctx models.WorkflowH
 		},
 		Line:              msg,
 		OperationComplete: operationComplete,
+		Status:            status,
 	}
 }
 
-func (p *AsyncProjectCommandOutputHandler) Register(jobID string, receiver chan string) {
+func (p *AsyncProjectCommandOutputHandler) Register(jobID string, receiver chan ProjectOutputEvent) {
 	p.addChan(receiver, jobID)
 }
 
 func (p *AsyncProjectCommandOutputHandler) Handle() {
 	for msg := range p.projectCmdOutput {
 		if msg.OperationComplete {
-			p.completeJob(msg.JobID)
+			p.completeJob(msg.JobID, msg.Status)
 			continue
 		}
 
@@ -208,7 +251,11 @@ func (p *AsyncProjectCommandOutputHandler) Handle() {
 	}
 }
 
-func (p *AsyncProjectCommandOutputHandler) completeJob(jobID string) {
+func (p *AsyncProjectCommandOutputHandler) completeJob(jobID string, status JobStatus) {
+	if status == "" {
+		status = JobStatusFinished
+	}
+
 	p.projectOutputBuffersLock.Lock()
 	p.receiverBuffersLock.Lock()
 	defer func() {
@@ -216,32 +263,44 @@ func (p *AsyncProjectCommandOutputHandler) completeJob(jobID string) {
 		p.receiverBuffersLock.Unlock()
 	}()
 
-	// Update operation status to complete
-	if outputBuffer, ok := p.projectOutputBuffers[jobID]; ok {
-		outputBuffer.OperationComplete = true
-		p.projectOutputBuffers[jobID] = outputBuffer
-	}
+	// Update operation status to complete, including jobs that produced no output.
+	outputBuffer := p.projectOutputBuffers[jobID]
+	outputBuffer.OperationComplete = true
+	outputBuffer.Status = status
+	p.projectOutputBuffers[jobID] = outputBuffer
 
 	// Close active receiver channels
 	if openChannels, ok := p.receiverBuffers[jobID]; ok {
 		for ch := range openChannels {
+			completion := ProjectOutputEvent{Type: ProjectOutputEventComplete, Status: status}
+			select {
+			case ch <- completion:
+			default:
+				// Preserve the terminal status even when a slow viewer filled its queue.
+				select {
+				case <-ch:
+				default:
+				}
+				ch <- completion
+			}
 			close(ch)
 		}
 	}
 
 }
 
-func (p *AsyncProjectCommandOutputHandler) addChan(ch chan string, jobID string) {
+func (p *AsyncProjectCommandOutputHandler) addChan(ch chan ProjectOutputEvent, jobID string) {
 	p.projectOutputBuffersLock.RLock()
 	outputBuffer := p.projectOutputBuffers[jobID]
 	p.projectOutputBuffersLock.RUnlock()
 
 	for _, line := range outputBuffer.Buffer {
-		ch <- line
+		ch <- ProjectOutputEvent{Type: ProjectOutputEventOutput, Data: line}
 	}
 
 	// No need register receiver since all the logs have been streamed
 	if outputBuffer.OperationComplete {
+		ch <- ProjectOutputEvent{Type: ProjectOutputEventComplete, Status: outputBuffer.Status}
 		close(ch)
 		return
 	}
@@ -250,7 +309,7 @@ func (p *AsyncProjectCommandOutputHandler) addChan(ch chan string, jobID string)
 	// to prevent new messages coming in interleaving with this backfill.
 	p.receiverBuffersLock.Lock()
 	if p.receiverBuffers[jobID] == nil {
-		p.receiverBuffers[jobID] = map[chan string]bool{}
+		p.receiverBuffers[jobID] = map[chan ProjectOutputEvent]bool{}
 	}
 	p.receiverBuffers[jobID][ch] = true
 	p.receiverBuffersLock.Unlock()
@@ -261,10 +320,10 @@ func (p *AsyncProjectCommandOutputHandler) writeLogLine(jobID string, line strin
 	p.receiverBuffersLock.Lock()
 	for ch := range p.receiverBuffers[jobID] {
 		select {
-		case ch <- line:
+		case ch <- ProjectOutputEvent{Type: ProjectOutputEventOutput, Data: line}:
 		default:
-			// Delete buffered channel if it's blocking.
-			delete(p.receiverBuffers[jobID], ch)
+			// Drop this update for a slow viewer. The full output remains available
+			// in projectOutputBuffers and the completion event must still be sent.
 		}
 	}
 	p.receiverBuffersLock.Unlock()
@@ -283,14 +342,14 @@ func (p *AsyncProjectCommandOutputHandler) writeLogLine(jobID string, line strin
 }
 
 // Remove channel, so client no longer receives Terraform output
-func (p *AsyncProjectCommandOutputHandler) Deregister(jobID string, ch chan string) {
+func (p *AsyncProjectCommandOutputHandler) Deregister(jobID string, ch chan ProjectOutputEvent) {
 	p.logger.Debug("Removing channel for %s", jobID)
 	p.receiverBuffersLock.Lock()
 	delete(p.receiverBuffers[jobID], ch)
 	p.receiverBuffersLock.Unlock()
 }
 
-func (p *AsyncProjectCommandOutputHandler) GetReceiverBufferForPull(jobID string) map[chan string]bool {
+func (p *AsyncProjectCommandOutputHandler) GetReceiverBufferForPull(jobID string) map[chan ProjectOutputEvent]bool {
 	p.receiverBuffersLock.RLock()
 	defer p.receiverBuffersLock.RUnlock()
 	return p.receiverBuffers[jobID]
@@ -340,12 +399,14 @@ type NoopProjectOutputHandler struct{}
 func (p *NoopProjectOutputHandler) Send(_ command.ProjectContext, _ string, _ bool) {
 }
 
+func (p *NoopProjectOutputHandler) Complete(_ command.ProjectContext, _ JobStatus) {}
+
 func (p *NoopProjectOutputHandler) SendWorkflowHook(_ models.WorkflowHookCommandContext, _ string, _ bool) {
 }
 
-func (p *NoopProjectOutputHandler) Register(_ string, _ chan string) {}
+func (p *NoopProjectOutputHandler) Register(_ string, _ chan ProjectOutputEvent) {}
 
-func (p *NoopProjectOutputHandler) Deregister(_ string, _ chan string) {}
+func (p *NoopProjectOutputHandler) Deregister(_ string, _ chan ProjectOutputEvent) {}
 
 func (p *NoopProjectOutputHandler) Handle() {
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/runatlantis/atlantis/server/events/models/testdata"
 	vcsmocks "github.com/runatlantis/atlantis/server/events/vcs/mocks"
 	"github.com/runatlantis/atlantis/server/events/webhooks"
+	"github.com/runatlantis/atlantis/server/jobs"
 	jobmocks "github.com/runatlantis/atlantis/server/jobs/mocks"
 	"github.com/runatlantis/atlantis/server/logging"
 	. "github.com/runatlantis/atlantis/testing"
@@ -123,6 +124,31 @@ func TestDefaultProjectCommandRunner_Plan(t *testing.T) {
 			mockRun.VerifyWasCalledOnce().Run(ctx, nil, "", repoDir, expEnvs, true, nil, nil)
 		}
 	}
+}
+
+func TestDefaultProjectCommandRunner_PlanPreservesBlockingPull(t *testing.T) {
+	RegisterMockTestingT(t)
+	mockLocker := mocks.NewMockProjectLocker()
+	runner := events.DefaultProjectCommandRunner{Locker: mockLocker}
+	ctx := command.ProjectContext{Log: logging.NewNoopLogger(t)}
+	When(mockLocker.TryLock(
+		Any[logging.SimpleLogging](),
+		Any[models.PullRequest](),
+		Any[models.User](),
+		Any[string](),
+		Any[models.Project](),
+		AnyBool(),
+	)).ThenReturn(&events.TryLockResponse{
+		LockAcquired:      false,
+		LockFailureReason: "locked",
+		BlockingPullNum:   18748,
+	}, nil)
+
+	result := runner.Plan(ctx)
+
+	Equals(t, "locked", result.Failure)
+	Equals(t, command.ProjectLockFailureReason, result.FailureReason)
+	Equals(t, 18748, result.BlockingPullNum)
 }
 
 func TestDefaultProjectCommandRunner_PlanSuppressesCustomRunStepStreaming(t *testing.T) {
@@ -315,9 +341,7 @@ func TestProjectOutputWrapper(t *testing.T) {
 				mockProjectCommandRunner.VerifyWasCalledOnce().Apply(ctx)
 			}
 
-			// Assert the ordering and content of JobMessageSender.Send calls.
-			// Banners (if any) must be streamed before the OperationComplete signal
-			// so the xterm-based job page renders the final status.
+			// Banners must be streamed before the structured completion event.
 			inOrder := new(InOrderContext)
 			expectedSends := 0
 			if c.Error {
@@ -336,8 +360,11 @@ func TestProjectOutputWrapper(t *testing.T) {
 				mockJobMessageSender.VerifyWasCalledInOrder(Once(), inOrder).Send(ctx, expectedBanner, false)
 				expectedSends++
 			}
-			mockJobMessageSender.VerifyWasCalledInOrder(Once(), inOrder).Send(ctx, "", true)
-			expectedSends++
+			expectedStatus := jobs.JobStatusFailed
+			if c.Success {
+				expectedStatus = jobs.JobStatusSucceeded
+			}
+			mockJobMessageSender.VerifyWasCalledInOrder(Once(), inOrder).Complete(ctx, expectedStatus)
 			mockJobMessageSender.VerifyWasCalled(Times(expectedSends)).Send(Any[command.ProjectContext](), Any[string](), Any[bool]())
 		})
 	}
@@ -368,7 +395,7 @@ func TestProjectOutputWrapper_DefersRemoteApplyURLSuccessStatus(t *testing.T) {
 
 	mockJobURLSetter.VerifyWasCalled(Once()).SetJobURLWithStatus(ctx, command.Apply, models.PendingCommitStatus, nil)
 	mockJobURLSetter.VerifyWasCalled(Never()).SetJobURLWithStatus(ctx, command.Apply, models.SuccessCommitStatus, &prjResult)
-	mockJobMessageSender.VerifyWasCalledOnce().Send(ctx, "", true)
+	mockJobMessageSender.VerifyWasCalledOnce().Complete(ctx, jobs.JobStatusSucceeded)
 
 	runner.PublishDeferredApplyStatuses([]command.ProjectContext{ctx}, command.Result{ProjectResults: []command.ProjectResult{{
 		ProjectCommandOutput: prjResult,
@@ -404,6 +431,7 @@ func TestProjectOutputWrapperSuppressesJobOutput(t *testing.T) {
 	mockProjectCommandRunner.VerifyWasCalledOnce().Plan(ctx)
 	mockJobURLSetter.VerifyWasCalled(Never()).SetJobURLWithStatus(Any[command.ProjectContext](), Any[command.Name](), Any[models.CommitStatus](), Any[*command.ProjectCommandOutput]())
 	mockJobMessageSender.VerifyWasCalled(Never()).Send(Any[command.ProjectContext](), Any[string](), Any[bool]())
+	mockJobMessageSender.VerifyWasCalled(Never()).Complete(Any[command.ProjectContext](), Any[jobs.JobStatus]())
 }
 
 func TestProjectOutputWrapperDoesNotReplayStreamedStepOutput(t *testing.T) {
@@ -452,8 +480,8 @@ func TestProjectOutputWrapperDoesNotReplayStreamedStepOutput(t *testing.T) {
 	ErrEquals(t, "error\nmore detail\nalready streamed output", result.Error)
 	inOrder := new(InOrderContext)
 	mockJobMessageSender.VerifyWasCalledInOrder(Once(), inOrder).Send(ctx, "\r\nError:\r\nerror\r\nmore detail\r\n", false)
-	mockJobMessageSender.VerifyWasCalledInOrder(Once(), inOrder).Send(ctx, "", true)
-	mockJobMessageSender.VerifyWasCalled(Times(2)).Send(Any[command.ProjectContext](), Any[string](), Any[bool]())
+	mockJobMessageSender.VerifyWasCalledInOrder(Once(), inOrder).Complete(ctx, jobs.JobStatusFailed)
+	mockJobMessageSender.VerifyWasCalledOnce().Send(Any[command.ProjectContext](), Any[string](), Any[bool]())
 }
 
 func TestProjectOutputWrapperDoesNotReplayCustomRunStepOutput(t *testing.T) {
@@ -516,13 +544,12 @@ func TestProjectOutputWrapperDoesNotReplayCustomRunStepOutput(t *testing.T) {
 	result := runner.Plan(ctx)
 
 	ErrContains(t, "already streamed output", result.Error)
-	_, messages, operationComplete := mockJobMessageSender.VerifyWasCalled(Times(2)).
+	_, messages, operationComplete := mockJobMessageSender.VerifyWasCalledOnce().
 		Send(Any[command.ProjectContext](), Any[string](), Any[bool]()).GetAllCapturedArguments()
 	Assert(t, strings.Contains(messages[0], "\r\nError:\r\nrunning 'sh -c' 'cat output.txt; exit 1'"), fmt.Sprintf("expected error summary banner, got %q", messages[0]))
 	Assert(t, !strings.Contains(messages[0], "already streamed output"), fmt.Sprintf("expected banner not to replay run output, got %q", messages[0]))
-	Equals(t, "", messages[1])
 	Equals(t, false, operationComplete[0])
-	Equals(t, true, operationComplete[1])
+	mockJobMessageSender.VerifyWasCalledOnce().Complete(ctx, jobs.JobStatusFailed)
 }
 
 func TestProjectOutputWrapperPreservesNonStreamedEnvStepOutput(t *testing.T) {
@@ -590,13 +617,12 @@ func TestProjectOutputWrapperPreservesNonStreamedEnvStepOutput(t *testing.T) {
 	result := runner.Plan(ctx)
 
 	ErrContains(t, "not streamed output", result.Error)
-	_, messages, operationComplete := mockJobMessageSender.VerifyWasCalled(Times(2)).
+	_, messages, operationComplete := mockJobMessageSender.VerifyWasCalledOnce().
 		Send(Any[command.ProjectContext](), Any[string](), Any[bool]()).GetAllCapturedArguments()
 	Assert(t, strings.Contains(messages[0], "\r\nError:\r\n"), fmt.Sprintf("expected error banner, got %q", messages[0]))
 	Assert(t, strings.Contains(messages[0], "\r\nnot streamed output\r\n"), fmt.Sprintf("expected banner to include non-streamed output, got %q", messages[0]))
-	Equals(t, "", messages[1])
 	Equals(t, false, operationComplete[0])
-	Equals(t, true, operationComplete[1])
+	mockJobMessageSender.VerifyWasCalledOnce().Complete(ctx, jobs.JobStatusFailed)
 }
 
 // Test what happens if there's no working dir. This signals that the project

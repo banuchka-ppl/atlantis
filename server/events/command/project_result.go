@@ -5,6 +5,10 @@ package command
 
 import "github.com/runatlantis/atlantis/server/events/models"
 
+type ProjectFailureReason string
+
+const ProjectLockFailureReason ProjectFailureReason = "project_lock"
+
 // ProjectResult is the result of executing a plan/policy_check/apply for a specific project.
 type ProjectResult struct {
 	ProjectCommandOutput
@@ -20,6 +24,8 @@ type ProjectResult struct {
 type ProjectCommandOutput struct {
 	Error              error
 	Failure            string
+	FailureReason      ProjectFailureReason
+	BlockingPullNum    int
 	PlanSuccess        *models.PlanSuccess
 	PolicyCheckResults *models.PolicyCheckResults
 	ApplySuccess       string

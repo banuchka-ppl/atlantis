@@ -32,7 +32,7 @@ func TestAppendNativeResultCommentMarker(t *testing.T) {
 	pull.BaseRepo = testdata.GithubRepo
 	ctx := &command.Context{Pull: pull}
 
-	marker, err := encodeNativeResultCommentMarker(ctx, cmd)
+	marker, err := encodeNativeResultCommentMarker(ctx, cmd, command.Result{})
 	Ok(t, err)
 	comment := appendNativeResultCommentMarker("rendered comment\n", marker)
 
@@ -50,6 +50,59 @@ func TestAppendNativeResultCommentMarker(t *testing.T) {
 	Equals(t, "default", payload.Workspace)
 	Equals(t, "prod", payload.ProjectName)
 	Equals(t, false, payload.Autoplan)
+	Equals(t, "success", payload.Outcome)
+	Equals(t, 0, len(payload.Failures))
+}
+
+func TestNativeResultCommentMarkerRecordsProjectFailures(t *testing.T) {
+	pull := testdata.Pull
+	pull.BaseRepo = testdata.GithubRepo
+	ctx := &command.Context{Pull: pull}
+	result := command.Result{ProjectResults: []command.ProjectResult{
+		{
+			ProjectCommandOutput: command.ProjectCommandOutput{
+				Failure:         "locked",
+				FailureReason:   command.ProjectLockFailureReason,
+				BlockingPullNum: 18748,
+			},
+			RepoRelDir:  "infra/locked",
+			Workspace:   "default",
+			ProjectName: "locked",
+		},
+		{
+			ProjectCommandOutput: command.ProjectCommandOutput{Error: errors.New("boom")},
+			RepoRelDir:           "infra/broken",
+			Workspace:            "default",
+			ProjectName:          "broken",
+		},
+		{
+			ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{}},
+			RepoRelDir:           "infra/success",
+			Workspace:            "default",
+			ProjectName:          "success",
+		},
+	}}
+
+	marker, err := encodeNativeResultCommentMarker(ctx, &CommentCommand{Name: command.Plan}, result)
+	Ok(t, err)
+	payload := decodeNativeResultCommentMarkerForTest(t, marker)
+
+	Equals(t, "error", payload.Outcome)
+	Equals(t, []nativeResultCommentMarkerFailure{
+		{
+			Dir:             "infra/locked",
+			Workspace:       "default",
+			ProjectName:     "locked",
+			Reason:          "project_lock",
+			BlockingPullNum: 18748,
+		},
+		{
+			Dir:         "infra/broken",
+			Workspace:   "default",
+			ProjectName: "broken",
+			Reason:      "error",
+		},
+	}, payload.Failures)
 }
 
 func TestPullUpdaterAddsNativeResultCommentMarkerWhenEnabled(t *testing.T) {

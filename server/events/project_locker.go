@@ -42,6 +42,9 @@ type TryLockResponse struct {
 	// LockFailureReason is the reason why the lock was not acquired. It will
 	// only be set if LockAcquired is false.
 	LockFailureReason string
+	// BlockingPullNum is the pull request that currently owns the lock. It is
+	// only set when another pull request prevents the lock from being acquired.
+	BlockingPullNum int
 	// UnlockFn will unlock the lock created by the caller. This might be called
 	// if there is an error later and the caller doesn't want to continue to
 	// hold the lock.
@@ -74,6 +77,7 @@ func (p *DefaultProjectLocker) TryLock(log logging.SimpleLogging, pull models.Pu
 		return &TryLockResponse{
 			LockAcquired:      false,
 			LockFailureReason: failureMsg,
+			BlockingPullNum:   lockAttempt.CurrLock.Pull.Num,
 		}, nil
 	}
 	log.Info("Acquired lock with id '%s'", lockAttempt.LockKey)
