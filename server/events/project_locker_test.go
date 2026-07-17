@@ -53,6 +53,7 @@ func TestDefaultProjectLocker_TryLockWhenLocked(t *testing.T) {
 	Equals(t, &events.TryLockResponse{
 		LockAcquired:      false,
 		LockFailureReason: fmt.Sprintf("This project is currently locked by an unapplied plan from pull %s. To continue, delete the lock from %s or apply that plan and merge the pull request.\n\nOnce the lock is released, comment `atlantis plan` here to re-plan.", link, link),
+		BlockingPullNum:   lockingPull.Num,
 	}, res)
 }
 
@@ -91,6 +92,7 @@ func TestDefaultProjectLocker_TryLockWhenLockedCustomExecutableName(t *testing.T
 	Equals(t, &events.TryLockResponse{
 		LockAcquired:      false,
 		LockFailureReason: fmt.Sprintf("This project is currently locked by an unapplied plan from pull %s. To continue, delete the lock from %s or apply that plan and merge the pull request.\n\nOnce the lock is released, comment `%s plan` here to re-plan.", link, link, customExecutableName),
+		BlockingPullNum:   lockingPull.Num,
 	}, res)
 }
 
