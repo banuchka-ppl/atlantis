@@ -98,6 +98,8 @@ type UserConfig struct {
 	ParallelPlan                    bool   `mapstructure:"parallel-plan"`
 	ParallelApply                   bool   `mapstructure:"parallel-apply"`
 	PendingApplyStatus              bool   `mapstructure:"pending-apply-status"`
+	PPLXNativeResultCommentMarkers  bool   `mapstructure:"pplx-native-result-comment-markers"`
+	PPLXNativeResultCommentUpsert   bool   `mapstructure:"pplx-native-result-comment-upsert"`
 	StatsNamespace                  string `mapstructure:"stats-namespace"`
 	PlanDrafts                      bool   `mapstructure:"allow-draft-prs"`
 	Port                            int    `mapstructure:"port"`

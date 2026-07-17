@@ -1476,6 +1476,18 @@ func TestClient_MarkdownPullLink(t *testing.T) {
 	Equals(t, exp, s)
 }
 
+func githubTestRepo() models.Repo {
+	return models.Repo{
+		FullName: "owner/repo",
+		Owner:    "owner",
+		Name:     "repo",
+		VCSHost: models.VCSHost{
+			Type:     models.Github,
+			Hostname: "github.com",
+		},
+	}
+}
+
 // disableSSLVerification disables ssl verification for the global http client
 // and returns a function to be called in a defer that will re-enable it.
 func disableSSLVerification() func() {
@@ -1554,6 +1566,211 @@ func TestClient_SplitComments(t *testing.T) {
 	Equals(t, 4, len(githubComments))
 	Assert(t, strings.Contains(firstSplit, command.Plan.String()), fmt.Sprintf("comment should contain the command name but was %q", firstSplit))
 	Assert(t, strings.Contains(secondSplit, "continued from previous comment"), fmt.Sprintf("comment should contain no reference to the command name but was %q", secondSplit))
+}
+
+func TestClient_UpsertNativeResultComment_UpdatesExisting(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	marker := "<!-- atlantis-native-result:v1:test -->"
+	var patchedBody string
+
+	testServer := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, "/api/v3/repos/owner/repo/issues/1/comments"):
+				w.Write([]byte(fmt.Sprintf(`[{"id":123,"node_id":"comment-node-id","body":"old\n\n%s","user":{"login":"user"}}]`, marker))) // nolint: errcheck
+				return
+			case r.Method == http.MethodPost && r.URL.Path == "/api/graphql":
+				w.Write([]byte(`{"data":{"node":{"isMinimized":false}}}`)) // nolint: errcheck
+				return
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/v3/repos/owner/repo/issues/comments/123":
+				defer r.Body.Close() // nolint: errcheck
+				var requestBody struct {
+					Body string `json:"body"`
+				}
+				Ok(t, json.NewDecoder(r.Body).Decode(&requestBody))
+				patchedBody = requestBody.Body
+				w.Write([]byte(`{"id":123}`)) // nolint: errcheck
+				return
+			default:
+				t.Errorf("got unexpected request %s %q", r.Method, r.RequestURI)
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+		}),
+	)
+
+	testServerURL, err := url.Parse(testServer.URL)
+	Ok(t, err)
+	client, err := github.New(testServerURL.Host, &github.UserCredentials{"user", "pass", ""}, github.Config{}, 0, logger)
+	Ok(t, err)
+	defer disableSSLVerification()()
+
+	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
+	Ok(t, err)
+	Equals(t, "new body\n\n"+marker, patchedBody)
+}
+
+func TestClient_UpsertNativeResultComment_CreatesWhenMatchIsMinimized(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	marker := "<!-- atlantis-native-result:v1:test -->"
+	var createdBody string
+
+	testServer := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, "/api/v3/repos/owner/repo/issues/1/comments"):
+				w.Write([]byte(fmt.Sprintf(`[{"id":123,"node_id":"comment-node-id","body":"old\n\n%s","user":{"login":"user"}}]`, marker))) // nolint: errcheck
+				return
+			case r.Method == http.MethodPost && r.URL.Path == "/api/graphql":
+				w.Write([]byte(`{"data":{"node":{"isMinimized":true}}}`)) // nolint: errcheck
+				return
+			case r.Method == http.MethodPost && r.URL.Path == "/api/v3/repos/owner/repo/issues/1/comments":
+				defer r.Body.Close() // nolint: errcheck
+				var requestBody struct {
+					Body string `json:"body"`
+				}
+				Ok(t, json.NewDecoder(r.Body).Decode(&requestBody))
+				createdBody = requestBody.Body
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"id":456}`)) // nolint: errcheck
+				return
+			default:
+				t.Errorf("got unexpected request %s %q", r.Method, r.RequestURI)
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+		}),
+	)
+
+	testServerURL, err := url.Parse(testServer.URL)
+	Ok(t, err)
+	client, err := github.New(testServerURL.Host, &github.UserCredentials{"user", "pass", ""}, github.Config{}, 0, logger)
+	Ok(t, err)
+	defer disableSSLVerification()()
+
+	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
+	Ok(t, err)
+	Equals(t, "new body\n\n"+marker, createdBody)
+}
+
+func TestClient_UpsertNativeResultComment_CreatesWhenNoMatch(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	marker := "<!-- atlantis-native-result:v1:test -->"
+	var createdBody string
+
+	testServer := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, "/api/v3/repos/owner/repo/issues/1/comments"):
+				w.Write([]byte(`[]`)) // nolint: errcheck
+				return
+			case r.Method == http.MethodPost && r.URL.Path == "/api/v3/repos/owner/repo/issues/1/comments":
+				defer r.Body.Close() // nolint: errcheck
+				var requestBody struct {
+					Body string `json:"body"`
+				}
+				Ok(t, json.NewDecoder(r.Body).Decode(&requestBody))
+				createdBody = requestBody.Body
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"id":123}`)) // nolint: errcheck
+				return
+			default:
+				t.Errorf("got unexpected request %s %q", r.Method, r.RequestURI)
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+		}),
+	)
+
+	testServerURL, err := url.Parse(testServer.URL)
+	Ok(t, err)
+	client, err := github.New(testServerURL.Host, &github.UserCredentials{"user", "pass", ""}, github.Config{}, 0, logger)
+	Ok(t, err)
+	defer disableSSLVerification()()
+
+	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
+	Ok(t, err)
+	Equals(t, "new body\n\n"+marker, createdBody)
+}
+
+func TestClient_UpsertNativeResultComment_CreatesWhenMatchPredatesProgressComment(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	marker := "<!-- atlantis-native-result:v1:test -->"
+	var createdBody string
+
+	testServer := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, "/api/v3/repos/owner/repo/issues/1/comments"):
+				w.Write([]byte(fmt.Sprintf(`[
+					{"id":123,"body":"old plan\n\n%s","user":{"login":"user"}},
+					{"id":456,"body":":white_check_mark: **Atlantis preparation steps done**\n\n<!-- atlantis-initial-comment:v1 signature=test -->","user":{"login":"user"}}
+				]`, marker))) // nolint: errcheck
+				return
+			case r.Method == http.MethodPost && r.URL.Path == "/api/v3/repos/owner/repo/issues/1/comments":
+				defer r.Body.Close() // nolint: errcheck
+				var requestBody struct {
+					Body string `json:"body"`
+				}
+				Ok(t, json.NewDecoder(r.Body).Decode(&requestBody))
+				createdBody = requestBody.Body
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"id":789}`)) // nolint: errcheck
+				return
+			default:
+				t.Errorf("got unexpected request %s %q", r.Method, r.RequestURI)
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+		}),
+	)
+
+	testServerURL, err := url.Parse(testServer.URL)
+	Ok(t, err)
+	client, err := github.New(testServerURL.Host, &github.UserCredentials{"user", "pass", ""}, github.Config{}, 0, logger)
+	Ok(t, err)
+	defer disableSSLVerification()()
+
+	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
+	Ok(t, err)
+	Equals(t, "new body\n\n"+marker, createdBody)
+}
+
+func TestClient_UpsertNativeResultComment_SkipsMarkedUpsertWhenCommentSplits(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	marker := "<!-- atlantis-native-result:v1:test -->"
+	var createdBodies []string
+
+	testServer := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/api/v3/repos/owner/repo/issues/1/comments" {
+				t.Errorf("got unexpected request %s %q", r.Method, r.RequestURI)
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			defer r.Body.Close() // nolint: errcheck
+			var requestBody struct {
+				Body string `json:"body"`
+			}
+			Ok(t, json.NewDecoder(r.Body).Decode(&requestBody))
+			createdBodies = append(createdBodies, requestBody.Body)
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(`{"id":123}`)) // nolint: errcheck
+		}),
+	)
+
+	testServerURL, err := url.Parse(testServer.URL)
+	Ok(t, err)
+	client, err := github.New(testServerURL.Host, &github.UserCredentials{"user", "pass", ""}, github.Config{}, 0, logger)
+	Ok(t, err)
+	defer disableSSLVerification()()
+
+	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, strings.Repeat("a", 65537), command.Plan.String(), marker)
+	Ok(t, err)
+	Equals(t, 2, len(createdBodies))
+	for _, body := range createdBodies {
+		Equals(t, false, strings.Contains(body, marker))
+	}
 }
 
 // Test that we retry the get pull request call if it 404s.

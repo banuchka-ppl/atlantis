@@ -122,6 +122,8 @@ var testFlags = map[string]any{
 	ParallelPlanFlag:                 true,
 	ParallelApplyFlag:                true,
 	PendingApplyStatusFlag:           false,
+	PPLXNativeResultCommentMarkers:   false,
+	PPLXNativeResultCommentUpsert:    false,
 	QuietPolicyChecks:                false,
 	RedisHost:                        "",
 	RedisInsecureSkipVerify:          false,

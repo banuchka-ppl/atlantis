@@ -61,6 +61,32 @@ func (c *InstrumentedClient) CreateComment(logger logging.SimpleLogging, repo mo
 	return nil
 }
 
+func (c *InstrumentedClient) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+	scope := c.StatsScope.SubScope("upsert_native_result_comment")
+	scope = SetGitScopeTags(scope, repo.FullName, pullNum)
+
+	executionTime := scope.Timer(metrics.ExecutionTimeMetric).Start()
+	defer executionTime.Stop()
+
+	executionSuccess := scope.Counter(metrics.ExecutionSuccessMetric)
+	executionError := scope.Counter(metrics.ExecutionErrorMetric)
+
+	upserter, ok := c.Client.(vcs.NativeResultCommentUpserter)
+	if !ok {
+		executionError.Inc(1)
+		return vcs.ErrNativeResultCommentUpsertUnsupported
+	}
+
+	if err := upserter.UpsertNativeResultComment(logger, repo, pullNum, comment, command, marker); err != nil {
+		executionError.Inc(1)
+		logger.Err("Unable to upsert native result comment for command %s, error: %s", command, err.Error())
+		return err
+	}
+
+	executionSuccess.Inc(1)
+	return nil
+}
+
 func (c *InstrumentedClient) ReactToComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, commentID int64, reaction string) error {
 	scope := c.StatsScope.SubScope("react_to_comment")
 

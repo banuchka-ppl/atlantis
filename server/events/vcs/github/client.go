@@ -29,6 +29,7 @@ import (
 // maxCommentLength is the maximum number of chars allowed in a single comment
 // by GitHub.
 const maxCommentLength = 65536
+const pplxInitialCommentMarkerPrefix = "<!-- atlantis-initial-comment:v1 "
 
 var (
 	clientMutationID            = githubv4.NewString("atlantis")
@@ -238,6 +239,101 @@ func (g *Client) CreateComment(logger logging.SimpleLogging, repo models.Repo, p
 		}
 	}
 	return nil
+}
+
+func (g *Client) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+	logger.Debug("Upserting native result comment on GitHub pull request %d", pullNum)
+
+	markedComment := strings.TrimRight(comment, "\n") + "\n\n" + marker
+	comments := common.SplitComment(logger, markedComment, maxCommentLength, g.maxCommentsPerCommand, command)
+	if len(comments) != 1 || comments[0] != markedComment {
+		logger.Debug("native result comment upsert skipped because comment would be split or truncated")
+		return g.CreateComment(logger, repo, pullNum, comment, command)
+	}
+
+	existingComment, err := g.FindNativeResultComment(logger, repo, pullNum, marker)
+	if err != nil {
+		return err
+	}
+	if existingComment == nil {
+		return g.CreateComment(logger, repo, pullNum, markedComment, command)
+	}
+
+	_, resp, err := g.client.Issues.EditComment(g.ctx, repo.Owner, repo.Name, existingComment.GetID(), &github.IssueComment{Body: &markedComment})
+	if resp != nil {
+		logger.Debug("PATCH /repos/%v/%v/issues/comments/%d returned: %v", repo.Owner, repo.Name, existingComment.GetID(), resp.StatusCode)
+	}
+	return err
+}
+
+func (g *Client) FindNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, marker string) (*github.IssueComment, error) {
+	var matchingComment *github.IssueComment
+	var latestInitialCommentID int64
+	nextPage := 0
+	for {
+		comments, resp, err := g.client.Issues.ListComments(g.ctx, repo.Owner, repo.Name, pullNum, &github.IssueListCommentsOptions{
+			Sort:        github.Ptr("created"),
+			Direction:   github.Ptr("asc"),
+			ListOptions: github.ListOptions{Page: nextPage, PerPage: 100},
+		})
+		if resp != nil {
+			logger.Debug("GET /repos/%v/%v/issues/%d/comments returned: %v", repo.Owner, repo.Name, pullNum, resp.StatusCode)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("listing comments: %w", err)
+		}
+		for _, comment := range comments {
+			if comment.User != nil && !strings.EqualFold(comment.User.GetLogin(), g.user) {
+				continue
+			}
+			body := comment.GetBody()
+			if strings.Contains(body, pplxInitialCommentMarkerPrefix) {
+				latestInitialCommentID = comment.GetID()
+			}
+			if strings.Contains(body, marker) {
+				matchingComment = comment
+			}
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		nextPage = resp.NextPage
+	}
+	if matchingComment != nil && latestInitialCommentID != 0 && matchingComment.GetID() < latestInitialCommentID {
+		logger.Debug("native result comment upsert skipped because matching result predates latest initial progress comment")
+		return nil, nil
+	}
+	if matchingComment == nil {
+		return nil, nil
+	}
+
+	isMinimized, err := g.isCommentMinimized(matchingComment.GetNodeID())
+	if err != nil {
+		return nil, fmt.Errorf("checking whether native result comment is minimized: %w", err)
+	}
+	if isMinimized {
+		logger.Debug("native result comment upsert skipped because matching result is minimized")
+		return nil, nil
+	}
+	return matchingComment, nil
+}
+
+func (g *Client) isCommentMinimized(nodeID string) (bool, error) {
+	// GitHub's REST issue-comment response does not expose minimization state.
+	var query struct {
+		Node struct {
+			IssueComment struct {
+				IsMinimized githubv4.Boolean
+			} `graphql:"... on IssueComment"`
+		} `graphql:"node(id: $id)"`
+	}
+	variables := map[string]any{
+		"id": githubv4.ID(nodeID),
+	}
+	if err := g.v4Client.Query(g.ctx, &query, variables); err != nil {
+		return false, err
+	}
+	return bool(query.Node.IssueComment.IsMinimized), nil
 }
 
 // ReactToComment adds a reaction to a comment.
