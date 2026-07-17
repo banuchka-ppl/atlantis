@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
+	"github.com/runatlantis/atlantis/server/jobs"
 	"github.com/runatlantis/atlantis/server/logging"
 )
 
@@ -19,8 +20,8 @@ type PartitionKeyGenerator interface {
 // PartitionRegistry is the registry holding each partition
 // and is responsible for registering/deregistering new buffers
 type PartitionRegistry interface {
-	Register(key string, buffer chan string)
-	Deregister(key string, buffer chan string)
+	Register(key string, buffer chan jobs.ProjectOutputEvent)
+	Deregister(key string, buffer chan jobs.ProjectOutputEvent)
 	IsKeyExists(key string) bool
 }
 
@@ -72,7 +73,7 @@ func (m *Multiplexor) Handle(w http.ResponseWriter, r *http.Request) error {
 
 	// Buffer size set to 1000 to ensure messages get queued.
 	// TODO: make buffer size configurable
-	buffer := make(chan string, 1000)
+	buffer := make(chan jobs.ProjectOutputEvent, 1000)
 
 	// spinning up a goroutine for this since we are attempting to block on the read side.
 	go m.registry.Register(key, buffer)

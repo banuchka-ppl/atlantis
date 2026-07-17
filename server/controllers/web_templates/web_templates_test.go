@@ -4,7 +4,9 @@
 package web_templates
 
 import (
+	"bytes"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,12 +69,18 @@ func TestLockTemplate(t *testing.T) {
 }
 
 func TestProjectJobsTemplate(t *testing.T) {
-	err := ProjectJobsTemplate.Execute(io.Discard, ProjectJobData{
+	var output bytes.Buffer
+	err := ProjectJobsTemplate.Execute(&output, ProjectJobData{
 		AtlantisVersion: "v0.0.0",
 		ProjectPath:     "project path",
 		CleanedBasePath: "/path",
 	})
 	Ok(t, err)
+	Assert(t, strings.Contains(output.String(), "Terraform job"), "expected job heading")
+	Assert(t, strings.Contains(output.String(), "project path"), "expected job ID")
+	Assert(t, strings.Contains(output.String(), "Connection lost"), "expected explicit disconnect state")
+	Assert(t, !strings.Contains(output.String(), "watermark"), "job viewer must not render the old watermark")
+	Assert(t, !strings.Contains(output.String(), "atlantis-icon_512"), "job viewer must not render the bottom-right logo")
 }
 
 func TestProjectJobsErrorTemplate(t *testing.T) {

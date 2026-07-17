@@ -67,10 +67,10 @@ func TestProjectCommandOutputHandler(t *testing.T) {
 
 	t.Run("receive message from main channel", func(t *testing.T) {
 		var wg sync.WaitGroup
-		var expectedMsg string
+		var expectedMsg jobs.ProjectOutputEvent
 		projectOutputHandler := createProjectCommandOutputHandler(t)
 
-		ch := make(chan string, 1)
+		ch := make(chan jobs.ProjectOutputEvent, 1)
 
 		// register channel and backfill from buffer
 		// Note: We call this synchronously because otherwise
@@ -94,7 +94,8 @@ func TestProjectCommandOutputHandler(t *testing.T) {
 
 		// Wait for the msg to be read.
 		wg.Wait()
-		Equals(t, expectedMsg, Msg)
+		Equals(t, expectedMsg.Type, jobs.ProjectOutputEventOutput)
+		Equals(t, expectedMsg.Data, Msg)
 	})
 
 	t.Run("copies buffer to new channels", func(t *testing.T) {
@@ -105,9 +106,9 @@ func TestProjectCommandOutputHandler(t *testing.T) {
 		// send first message to populated the buffer
 		projectOutputHandler.Send(ctx, Msg, false)
 
-		ch := make(chan string, 2)
+		ch := make(chan jobs.ProjectOutputEvent, 2)
 
-		receivedMsgs := []string{}
+		receivedMsgs := []jobs.ProjectOutputEvent{}
 
 		wg.Add(1)
 		// read from channel asynchronously
@@ -131,7 +132,10 @@ func TestProjectCommandOutputHandler(t *testing.T) {
 		wg.Wait()
 		close(ch)
 
-		expectedMsgs := []string{Msg, Msg}
+		expectedMsgs := []jobs.ProjectOutputEvent{
+			{Type: jobs.ProjectOutputEventOutput, Data: Msg},
+			{Type: jobs.ProjectOutputEventOutput, Data: Msg},
+		}
 		assert.Len(t, receivedMsgs, len(expectedMsgs))
 		for i := range expectedMsgs {
 			assert.Equal(t, expectedMsgs[i], receivedMsgs[i])
@@ -142,7 +146,7 @@ func TestProjectCommandOutputHandler(t *testing.T) {
 		var wg sync.WaitGroup
 		projectOutputHandler := createProjectCommandOutputHandler(t)
 
-		ch := make(chan string, 2)
+		ch := make(chan jobs.ProjectOutputEvent, 2)
 
 		// register channel and backfill from buffer
 		// Note: We call this synchronously because otherwise
@@ -155,7 +159,7 @@ func TestProjectCommandOutputHandler(t *testing.T) {
 		// read from channel
 		go func() {
 			for msg := range ch {
-				if msg == "Complete" {
+				if msg.Data == "Complete" {
 					wg.Done()
 				}
 			}
@@ -187,7 +191,7 @@ func TestProjectCommandOutputHandler(t *testing.T) {
 	t.Run("mark operation status complete and close conn buffers for the job", func(t *testing.T) {
 		projectOutputHandler := createProjectCommandOutputHandler(t)
 
-		ch := make(chan string, 2)
+		ch := make(chan jobs.ProjectOutputEvent, 2)
 
 		// register channel and backfill from buffer
 		// Note: We call this synchronously because otherwise
@@ -195,33 +199,57 @@ func TestProjectCommandOutputHandler(t *testing.T) {
 		// before sending messages due to the way we lock our buffer memory cache
 		projectOutputHandler.Register(ctx.JobID, ch)
 
-		// read from channel
-		go func() {
-			for range ch { //revive:disable-line:empty-block
-			}
-		}()
-
 		projectOutputHandler.Send(ctx, Msg, false)
-		projectOutputHandler.Send(ctx, "", true)
+		projectOutputHandler.Complete(ctx, jobs.JobStatusSucceeded)
 
-		// Wait for the handler to process the message
-		time.Sleep(10 * time.Millisecond)
+		outputEvent := <-ch
+		completionEvent := <-ch
+		_, open := <-ch
+		assert.Equal(t, jobs.ProjectOutputEvent{Type: jobs.ProjectOutputEventOutput, Data: Msg}, outputEvent)
+		assert.Equal(t, jobs.ProjectOutputEvent{Type: jobs.ProjectOutputEventComplete, Status: jobs.JobStatusSucceeded}, completionEvent)
+		assert.False(t, open)
 
 		dfProjectOutputHandler, ok := projectOutputHandler.(*jobs.AsyncProjectCommandOutputHandler)
 		assert.True(t, ok)
 
 		outputBuffer := dfProjectOutputHandler.GetProjectOutputBuffer(ctx.JobID)
 		assert.True(t, outputBuffer.OperationComplete)
+		assert.Equal(t, jobs.JobStatusSucceeded, outputBuffer.Status)
+	})
 
-		_, ok = (<-ch)
-		assert.False(t, ok)
+	t.Run("preserve completion status when viewer queue is full", func(t *testing.T) {
+		projectOutputHandler := createProjectCommandOutputHandler(t)
+		ch := make(chan jobs.ProjectOutputEvent, 1)
+		projectOutputHandler.Register(ctx.JobID, ch)
 
+		projectOutputHandler.Send(ctx, Msg, false)
+		projectOutputHandler.Complete(ctx, jobs.JobStatusFailed)
+		time.Sleep(10 * time.Millisecond)
+
+		completionEvent := <-ch
+		_, open := <-ch
+		assert.Equal(t, jobs.ProjectOutputEvent{Type: jobs.ProjectOutputEventComplete, Status: jobs.JobStatusFailed}, completionEvent)
+		assert.False(t, open)
+	})
+
+	t.Run("register completed job that produced no output", func(t *testing.T) {
+		projectOutputHandler := createProjectCommandOutputHandler(t)
+		projectOutputHandler.Complete(ctx, jobs.JobStatusSucceeded)
+
+		ch := make(chan jobs.ProjectOutputEvent, 1)
+		projectOutputHandler.Register(ctx.JobID, ch)
+
+		completionEvent := <-ch
+		_, open := <-ch
+		assert.Equal(t, jobs.ProjectOutputEvent{Type: jobs.ProjectOutputEventComplete, Status: jobs.JobStatusSucceeded}, completionEvent)
+		assert.False(t, open)
+		assert.True(t, projectOutputHandler.IsKeyExists(ctx.JobID))
 	})
 
 	t.Run("close conn buffer after streaming logs for completed operation", func(t *testing.T) {
 		projectOutputHandler := createProjectCommandOutputHandler(t)
 
-		ch := make(chan string)
+		ch := make(chan jobs.ProjectOutputEvent)
 
 		// register channel and backfill from buffer
 		// Note: We call this synchronously because otherwise
@@ -241,7 +269,7 @@ func TestProjectCommandOutputHandler(t *testing.T) {
 		// Wait for the handler to process the message
 		time.Sleep(10 * time.Millisecond)
 
-		ch2 := make(chan string, 2)
+		ch2 := make(chan jobs.ProjectOutputEvent, 2)
 		opComplete := make(chan bool)
 
 		// buffer channel will be closed immediately after logs are streamed
