@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/runatlantis/atlantis/server/core/boltdb"
+	"github.com/runatlantis/atlantis/server/core/locking"
 	"github.com/runatlantis/atlantis/server/jobs"
 	"github.com/runatlantis/atlantis/server/logging"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +31,7 @@ import (
 )
 
 func TestCleanUpPullWorkspaceErr(t *testing.T) {
-	t.Log("when workspace.Delete returns an error, we return it")
+	t.Log("when workspace.Delete returns an error, we still unlock the pull and return the error")
 	RegisterMockTestingT(t)
 	logger := logging.NewNoopLogger(t)
 	w := mocks.NewMockWorkingDir()
@@ -40,7 +41,13 @@ func TestCleanUpPullWorkspaceErr(t *testing.T) {
 		db.Close()
 	})
 	Ok(t, err)
+	l := locking.NewClient(db)
+	project := models.NewProject(testdata.GithubRepo.FullName, "path", "project")
+	lockAttempt, err := l.TryLock(project, "default", testdata.Pull, models.User{Username: "user"})
+	Ok(t, err)
+	Assert(t, lockAttempt.LockAcquired, "expected test lock to be acquired")
 	pce := events.PullClosedExecutor{
+		Locker:             l,
 		WorkingDir:         w,
 		PullClosedTemplate: &events.PullClosedEventTemplate{},
 		Database:           db,
@@ -49,6 +56,9 @@ func TestCleanUpPullWorkspaceErr(t *testing.T) {
 	When(w.Delete(logger, testdata.GithubRepo, testdata.Pull)).ThenReturn(err)
 	actualErr := pce.CleanUpPull(logger, testdata.GithubRepo, testdata.Pull)
 	Equals(t, "cleaning workspace: err", actualErr.Error())
+	locks, err := l.List()
+	Ok(t, err)
+	Equals(t, 0, len(locks))
 }
 
 func TestCleanUpPullUnlockErr(t *testing.T) {

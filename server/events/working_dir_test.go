@@ -2454,6 +2454,33 @@ func TestFileWorkspace_DeleteRemovesOnlyManagedSubPaths(t *testing.T) {
 	Ok(t, err)
 }
 
+func TestFileWorkspace_DeleteThroughRepoSymlink(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	dataDir := t.TempDir()
+	localRepoDir := filepath.Join(t.TempDir(), "repo")
+	repoLink := filepath.Join(dataDir, "repos", "owner", "repo")
+	Ok(t, os.MkdirAll(filepath.Dir(repoLink), 0700))
+	Ok(t, os.Symlink(localRepoDir, repoLink))
+
+	pullDir := filepath.Join(localRepoDir, "1", "default")
+	otherPullDir := filepath.Join(localRepoDir, "2", "default")
+	Ok(t, os.MkdirAll(pullDir, 0700))
+	Ok(t, os.MkdirAll(otherPullDir, 0700))
+
+	repo := models.Repo{FullName: "owner/repo"}
+	pull := models.PullRequest{Num: 1, BaseRepo: repo}
+	wd := &events.FileWorkspace{DataDir: dataDir}
+	Ok(t, wd.Delete(logger, repo, pull))
+
+	_, err := os.Stat(filepath.Dir(pullDir))
+	Assert(t, os.IsNotExist(err), "expected pull directory behind repo symlink to be deleted")
+	_, err = os.Stat(otherPullDir)
+	Ok(t, err)
+	linkInfo, err := os.Lstat(repoLink)
+	Ok(t, err)
+	Assert(t, linkInfo.Mode()&os.ModeSymlink != 0, "expected managed repo symlink to remain")
+}
+
 func TestFileWorkspace_PathTraversal(t *testing.T) {
 	logger := logging.NewNoopLogger(t)
 	dataDir := t.TempDir()

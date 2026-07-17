@@ -899,7 +899,9 @@ func (w *FileWorkspace) Delete(logger logging.SimpleLogging, r models.Repo, p mo
 		return err
 	}
 	logger.Info("Deleting repo pull directory: %s", repoPullDir)
-	return removeAllSubPath(filepath.Join(w.DataDir, workingDirPrefix), repoPullDir)
+	// Anchor the root at the repository so deployments can place managed repo
+	// directories behind symlinks while deletion remains confined to this repo.
+	return removeAllSubPath(filepath.Dir(repoPullDir), repoPullDir)
 }
 
 // DeleteForWorkspace deletes the working dir for this workspace.
