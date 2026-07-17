@@ -125,6 +125,31 @@ func TestDefaultProjectCommandRunner_Plan(t *testing.T) {
 	}
 }
 
+func TestDefaultProjectCommandRunner_PlanPreservesBlockingPull(t *testing.T) {
+	RegisterMockTestingT(t)
+	mockLocker := mocks.NewMockProjectLocker()
+	runner := events.DefaultProjectCommandRunner{Locker: mockLocker}
+	ctx := command.ProjectContext{Log: logging.NewNoopLogger(t)}
+	When(mockLocker.TryLock(
+		Any[logging.SimpleLogging](),
+		Any[models.PullRequest](),
+		Any[models.User](),
+		Any[string](),
+		Any[models.Project](),
+		AnyBool(),
+	)).ThenReturn(&events.TryLockResponse{
+		LockAcquired:      false,
+		LockFailureReason: "locked",
+		BlockingPullNum:   18748,
+	}, nil)
+
+	result := runner.Plan(ctx)
+
+	Equals(t, "locked", result.Failure)
+	Equals(t, command.ProjectLockFailureReason, result.FailureReason)
+	Equals(t, 18748, result.BlockingPullNum)
+}
+
 func TestDefaultProjectCommandRunner_PlanSuppressesCustomRunStepStreaming(t *testing.T) {
 	RegisterMockTestingT(t)
 	mockRun := mocks.NewMockCustomStepRunner()

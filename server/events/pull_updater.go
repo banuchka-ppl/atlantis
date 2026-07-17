@@ -59,7 +59,7 @@ func (c *PullUpdater) updatePull(ctx *command.Context, cmd PullCommand, res comm
 	var marker string
 	if c.NativeResultCommentMarkersEnabled || shouldUpsertNativeResult {
 		var err error
-		marker, err = encodeNativeResultCommentMarker(ctx, cmd)
+		marker, err = encodeNativeResultCommentMarker(ctx, cmd, res)
 		if err != nil {
 			ctx.Log.Err("unable to encode native result comment marker: %s", err)
 		}
