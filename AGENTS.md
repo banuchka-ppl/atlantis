@@ -8,6 +8,20 @@
 
 > **AI Usage Policy:** Before contributing with AI assistance, read the [AI_USAGE_POLICY.md](AI_USAGE_POLICY.md).
 
+## Perplexity Fork Workflow
+
+When working in `banuchka-ppl/atlantis`, read
+[`docs/pplx-fork-maintenance.md`](docs/pplx-fork-maintenance.md) before creating
+branches, pull requests, or release tags.
+
+- Keep fork `main` as an exact upstream mirror. Never target it with Perplexity
+  changes.
+- Start routine Perplexity work from `pplx/integration` and target pull requests
+  back to an integration branch.
+- Create `vX.Y.Z-pplx.N` tags only from a reviewed integration branch. Run
+  `scripts/verify-pplx-release-lineage.sh` before pushing a release tag.
+- Never move or reuse a published Perplexity release tag.
+
 ## Build & Test (Always from repo root)
 
 **Prerequisites:** Go 1.25.8 (from go.mod) • Node 20+ & npm 10+ (website) • Docker • Terraform 1.11.1+ (integration tests)

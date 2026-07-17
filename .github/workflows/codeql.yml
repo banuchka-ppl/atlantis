@@ -16,6 +16,7 @@ on:
     branches:
       - 'main'
       - 'release-**'
+      - 'pplx/**'
   pull_request:
     # The branches below must be a subset of the branches above
     types:
@@ -26,6 +27,7 @@ on:
     branches:
       - 'main'
       - 'release-**'
+      - 'pplx/**'
 
   schedule:
     - cron: '17 9 * * 5'

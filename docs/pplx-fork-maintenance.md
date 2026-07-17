@@ -85,6 +85,51 @@ gh pr create \
   --head pplx/my-change
 ```
 
+## Release a routine fork change
+
+Tag routine releases only after the change has merged into `pplx/integration`.
+Never create a Perplexity release from fork `main` or from an unmerged feature
+branch.
+
+Fetch the integration refs and release tags, then name the previous cumulative
+release explicitly:
+
+```bash
+git fetch origin \
+  '+refs/heads/pplx/integration*:refs/remotes/origin/pplx/integration*' \
+  '+refs/tags/v*-pplx.*:refs/tags/v*-pplx.*'
+
+PREVIOUS_TAG=v0.46.0-pplx.5
+RELEASE_TAG=v0.46.0-pplx.6
+RELEASE_COMMIT=origin/pplx/integration
+```
+
+The candidate must contain the previous numbered release. Create the tag
+locally, run the same lineage verifier used by the publishing workflows, and
+only then push it:
+
+```bash
+git merge-base --is-ancestor "${PREVIOUS_TAG}" "${RELEASE_COMMIT}"
+git tag "${RELEASE_TAG}" "${RELEASE_COMMIT}"
+scripts/verify-pplx-release-lineage.sh \
+  "${RELEASE_TAG}" \
+  "${RELEASE_COMMIT}"
+git push origin "${RELEASE_TAG}"
+```
+
+Both release workflows run this verifier before publishing archives or
+container images. A failed lineage check means the tag was created from the
+wrong branch or omitted a numbered cumulative release; do not move or reuse a
+tag that has already been pushed.
+
+### v0.46.0-pplx.4 lineage exception
+
+`v0.46.0-pplx.4` was created from fork `main` and does not contain the
+`v0.46.0-pplx.1` through `v0.46.0-pplx.3` patch series. It remains immutable
+for auditability but must not be used as a cumulative base. `v0.46.0-pplx.5`
+supersedes it, so the intentional cumulative ancestry is
+`v0.46.0-pplx.3` → `v0.46.0-pplx.5`.
+
 ## Port the patch series to a new upstream baseline
 
 Prefer a stable upstream tag for a production release. Use `upstream/main` when
@@ -173,8 +218,14 @@ After the port pull request merges, tag the merged versioned integration branch:
 
 ```bash
 git fetch origin
-git tag v0.46.0-pplx.1 "origin/pplx/integration-${LINE}"
-git push origin v0.46.0-pplx.1
+RELEASE_TAG=v0.46.0-pplx.1
+RELEASE_COMMIT="origin/pplx/integration-${LINE}"
+
+git tag "${RELEASE_TAG}" "${RELEASE_COMMIT}"
+scripts/verify-pplx-release-lineage.sh \
+  "${RELEASE_TAG}" \
+  "${RELEASE_COMMIT}"
+git push origin "${RELEASE_TAG}"
 ```
 
 Pushing the tag starts the fork release workflow. Confirm that the release and
@@ -200,5 +251,8 @@ and new release lines remain easy to inspect.
 - Ports replay only Perplexity commits onto a known upstream commit or tag.
 - Released and versioned integration branches are not rebased or rewritten.
 - Custom release tags are immutable.
+- Except for the documented `v0.46.0-pplx.4` exception, each numbered custom
+  release contains the preceding cumulative release and is reachable from a
+  reviewed integration branch.
 - A generic integration pointer is promoted only after the new release is
   verified.

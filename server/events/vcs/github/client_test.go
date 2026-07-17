@@ -1577,7 +1577,7 @@ func TestClient_UpsertNativeResultComment_UpdatesExisting(t *testing.T) {
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, "/api/v3/repos/owner/repo/issues/1/comments"):
-				w.Write([]byte(fmt.Sprintf(`[{"id":123,"node_id":"comment-node-id","body":"old\n\n%s","user":{"login":"user"}}]`, marker))) // nolint: errcheck
+				fmt.Fprintf(w, `[{"id":123,"node_id":"comment-node-id","body":"old\n\n%s","user":{"login":"user"}}]`, marker) // nolint: errcheck
 				return
 			case r.Method == http.MethodPost && r.URL.Path == "/api/graphql":
 				w.Write([]byte(`{"data":{"node":{"isMinimized":false}}}`)) // nolint: errcheck
@@ -1619,7 +1619,7 @@ func TestClient_UpsertNativeResultComment_CreatesWhenMatchIsMinimized(t *testing
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, "/api/v3/repos/owner/repo/issues/1/comments"):
-				w.Write([]byte(fmt.Sprintf(`[{"id":123,"node_id":"comment-node-id","body":"old\n\n%s","user":{"login":"user"}}]`, marker))) // nolint: errcheck
+				fmt.Fprintf(w, `[{"id":123,"node_id":"comment-node-id","body":"old\n\n%s","user":{"login":"user"}}]`, marker) // nolint: errcheck
 				return
 			case r.Method == http.MethodPost && r.URL.Path == "/api/graphql":
 				w.Write([]byte(`{"data":{"node":{"isMinimized":true}}}`)) // nolint: errcheck
@@ -1702,10 +1702,10 @@ func TestClient_UpsertNativeResultComment_CreatesWhenMatchPredatesProgressCommen
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodGet && strings.HasPrefix(r.RequestURI, "/api/v3/repos/owner/repo/issues/1/comments"):
-				w.Write([]byte(fmt.Sprintf(`[
+				fmt.Fprintf(w, `[
 					{"id":123,"body":"old plan\n\n%s","user":{"login":"user"}},
 					{"id":456,"body":":white_check_mark: **Atlantis preparation steps done**\n\n<!-- atlantis-initial-comment:v1 signature=test -->","user":{"login":"user"}}
-				]`, marker))) // nolint: errcheck
+				]`, marker) // nolint: errcheck
 				return
 			case r.Method == http.MethodPost && r.URL.Path == "/api/v3/repos/owner/repo/issues/1/comments":
 				defer r.Body.Close() // nolint: errcheck
