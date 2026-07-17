@@ -59,7 +59,7 @@ FROM debian:${DEBIAN_TAG} AS debian-base
 # renovate: datasource=repology depName=debian_13/ca-certificates versioning=loose
 ENV DEBIAN_CA_CERTIFICATES_VERSION="20250419"
 # renovate: datasource=repology depName=debian_13/curl versioning=loose
-ENV DEBIAN_CURL_VERSION="8.14.1-2+deb13u3"
+ENV DEBIAN_CURL_VERSION="8.14.1-2+deb13u4"
 # renovate: datasource=repology depName=debian_13/git versioning=loose
 ENV DEBIAN_GIT_VERSION="1:2.47.3-0+deb13u1"
 # renovate: datasource=repology depName=debian_13/unzip versioning=loose
@@ -190,7 +190,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # renovate: datasource=repology depName=alpine_3_23/ca-certificates versioning=loose
 ENV CA_CERTIFICATES_VERSION="20260611-r0"
 # renovate: datasource=repology depName=alpine_3_23/curl versioning=loose
-ENV CURL_VERSION="8.19.0-r0"
+ENV CURL_VERSION="8.20.0-r0"
 # renovate: datasource=repology depName=alpine_3_23/git versioning=loose
 ENV GIT_VERSION="2.52.0-r0"
 # renovate: datasource=repology depName=alpine_3_23/unzip versioning=loose
