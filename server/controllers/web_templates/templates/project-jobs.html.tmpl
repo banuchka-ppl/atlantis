@@ -2,94 +2,539 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>atlantis</title>
-    <meta name="description" content>
-    <meta name="author" content>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Atlantis job {{ .ProjectPath }}</title>
     <link rel="stylesheet" href="{{ .CleanedBasePath }}/static/css/xterm-5.3.0.css">
-    <link rel="stylesheet" href="{{ .CleanedBasePath }}/static/css/normalize.css">
-    <link rel="stylesheet" href="{{ .CleanedBasePath }}/static/css/skeleton.css">
-    <link rel="stylesheet" href="{{ .CleanedBasePath }}/static/css/custom.css">
     <link rel="icon" type="image/png" href="{{ .CleanedBasePath }}/static/images/atlantis-icon.png">
     <style>
+      :root {
+        color-scheme: dark;
+        --background: #0a0d12;
+        --panel: #11161e;
+        --panel-raised: #161d27;
+        --border: #283241;
+        --border-subtle: #202936;
+        --text: #f0f4f8;
+        --muted: #94a3b8;
+        --accent: #58d6c7;
+        --accent-soft: rgba(88, 214, 199, 0.12);
+        --success: #5ee2a0;
+        --failure: #ff7b86;
+        --warning: #f5c96a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+        margin: 0;
+        background: var(--background);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      body {
+        min-height: 100vh;
+        min-height: 100dvh;
+        padding: 24px;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      .job-shell {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        width: min(1600px, 100%);
+        min-height: calc(100vh - 48px);
+        min-height: calc(100dvh - 48px);
+        margin: 0 auto;
+        overflow: hidden;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+      }
+
+      .job-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        min-height: 76px;
+        padding: 16px 20px;
+        background: linear-gradient(180deg, var(--panel-raised), var(--panel));
+        border-bottom: 1px solid var(--border-subtle);
+      }
+
+      .job-title {
+        min-width: 0;
+      }
+
+      .eyebrow {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+      }
+
+      .job-heading {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      h1 {
+        flex: none;
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.3;
+      }
+
+      .job-id {
+        overflow: hidden;
+        color: var(--muted);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .job-status {
+        display: inline-flex;
+        flex: none;
+        align-items: center;
+        gap: 8px;
+        min-height: 34px;
+        padding: 7px 11px;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.025);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        background: var(--muted);
+        border-radius: 50%;
+      }
+
+      .job-status[data-status="running"] .status-dot {
+        background: var(--accent);
+        box-shadow: 0 0 0 4px var(--accent-soft);
+        animation: pulse 1.8s ease-in-out infinite;
+      }
+
+      .job-status[data-status="succeeded"] {
+        color: var(--success);
+        border-color: rgba(94, 226, 160, 0.28);
+      }
+
+      .job-status[data-status="succeeded"] .status-dot {
+        background: var(--success);
+      }
+
+      .job-status[data-status="failed"] {
+        color: var(--failure);
+        border-color: rgba(255, 123, 134, 0.28);
+      }
+
+      .job-status[data-status="failed"] .status-dot {
+        background: var(--failure);
+      }
+
+      .job-status[data-status="disconnected"] {
+        color: var(--warning);
+        border-color: rgba(245, 201, 106, 0.28);
+      }
+
+      .job-status[data-status="disconnected"] .status-dot {
+        background: var(--warning);
+      }
+
+      .status-divider {
+        width: 1px;
+        height: 14px;
+        background: currentColor;
+        opacity: 0.25;
+      }
+
+      .terminal-card {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        min-height: 0;
+      }
+
+      .terminal-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        min-height: 48px;
+        padding: 8px 12px 8px 18px;
+        background: #0e131a;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+
+      .terminal-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .terminal-label::before {
+        content: ">_";
+        color: var(--accent);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      .toolbar-actions,
+      .search-controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .search-controls {
+        padding: 3px;
+        background: var(--panel-raised);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+
+      .search-input {
+        width: min(220px, 26vw);
+        height: 28px;
+        padding: 4px 8px;
+        color: var(--text);
+        background: transparent;
+        border: 0;
+        outline: 0;
+        font-size: 12px;
+      }
+
+      .search-input::placeholder {
+        color: #708095;
+      }
+
+      .toolbar-button {
+        height: 28px;
+        padding: 0 9px;
+        color: var(--muted);
+        background: transparent;
+        border: 0;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .toolbar-button:hover,
+      .toolbar-button:focus-visible {
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.07);
+        outline: none;
+      }
+
+      .terminal-wrap {
+        position: relative;
+        min-height: 0;
+        overflow: hidden;
+        background: #090c11;
+      }
+
       #terminal {
-        position: fixed;
-        top: 0px;
-        left: 0px;
-        bottom: 0px;
-        right: 0px;
-        border: 5px solid white;
-        z-index: 10;
+        position: absolute;
+        inset: 0;
+        padding: 14px 10px 10px 16px;
+      }
+
+      .empty-state {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        z-index: 1;
+        color: #708095;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 13px;
+        pointer-events: none;
+      }
+
+      .empty-state[hidden] {
+        display: none;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.45; }
+      }
+
+      @media (max-width: 720px) {
+        body {
+          padding: 0;
         }
 
-      .terminal.xterm {
-        padding: 10px;
+        .job-shell {
+          min-height: 100vh;
+          min-height: 100dvh;
+          border: 0;
+          border-radius: 0;
+        }
+
+        .job-header {
+          align-items: stretch;
+          flex-direction: column;
+          gap: 12px;
+          padding: 14px 16px;
+        }
+
+        .job-status {
+          align-self: flex-start;
+        }
+
+        .job-heading {
+          display: block;
+        }
+
+        .job-id {
+          display: block;
+          max-width: calc(100vw - 32px);
+          margin-top: 3px;
+        }
+
+        .terminal-toolbar {
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 10px 12px;
+        }
+
+        .toolbar-actions {
+          width: 100%;
+        }
+
+        .search-controls {
+          flex: 1;
+          min-width: 0;
+          width: 100%;
+        }
+
+        .search-input {
+          flex: 1 1 0;
+          min-width: 0;
+          width: 0;
+        }
+
+        #search-previous,
+        #jump-latest {
+          display: none;
+        }
       }
-      #watermark {
-        opacity: 0.5;
-        color: BLACK;
-        position: absolute;
-        bottom: 0;
-        padding-right: 30px;
-        padding-bottom: 15px;
-        right: 0;
-        z-index: 15;
+
+      @media (prefers-reduced-motion: reduce) {
+        .job-status[data-status="running"] .status-dot {
+          animation: none;
+        }
       }
     </style>
   </head>
 
   <body>
-    <section id="watermark">
-    <a title="atlantis" href="{{ .CleanedBasePath }}/"><img class="hero" src="{{ .CleanedBasePath }}/static/images/atlantis-icon_512.png"/></a>
-    <p class="terminal-heading-white">atlantis</p>
-    <p class="title-heading"><strong></strong></p>
-    </section>
-    <section>
-      <div id="terminal"></div>
-    </section>
-  </div>
-  <footer class="footer-white">Initializing...
-  </footer>
+    <main class="job-shell">
+      <header class="job-header">
+        <div class="job-title">
+          <span class="eyebrow">ATLANTIS</span>
+          <div class="job-heading">
+            <h1>Terraform job</h1>
+            <code class="job-id" title="{{ .ProjectPath }}">{{ .ProjectPath }}</code>
+          </div>
+        </div>
+        <div id="job-status" class="job-status" data-status="connecting" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-label">Connecting</span>
+          <span class="status-divider" aria-hidden="true"></span>
+          <span id="elapsed-time">0s</span>
+        </div>
+      </header>
 
-    <script src="{{ .CleanedBasePath }}/static/js/jquery-3.5.1.min.js"></script>
+      <section class="terminal-card" aria-label="Terraform command output">
+        <div class="terminal-toolbar">
+          <span class="terminal-label">Live output</span>
+          <div class="toolbar-actions">
+            <form id="search-form" class="search-controls" role="search">
+              <input id="search-input" class="search-input" type="search" placeholder="Find in output" aria-label="Find in output" autocomplete="off">
+              <button id="search-previous" class="toolbar-button" type="button" aria-label="Previous match">↑</button>
+              <button id="search-next" class="toolbar-button" type="submit" aria-label="Next match">↓</button>
+            </form>
+            <button id="jump-latest" class="toolbar-button" type="button">Latest</button>
+          </div>
+        </div>
+        <div class="terminal-wrap">
+          <div id="empty-state" class="empty-state">Waiting for command output…</div>
+          <div id="terminal"></div>
+        </div>
+      </section>
+    </main>
+
     <script src="{{ .CleanedBasePath }}/static/js/xterm-5.3.0.js"></script>
-    <script src="{{ .CleanedBasePath }}/static/js/xterm-addon-attach-0.9.0.js"></script>
     <script src="{{ .CleanedBasePath }}/static/js/xterm-addon-fit-0.8.0.js"></script>
     <script src="{{ .CleanedBasePath }}/static/js/xterm-addon-search-0.13.0.js"></script>
-    <script src="{{ .CleanedBasePath }}/static/js/xterm-addon-search-bar.js"></script>
-
     <script>
-      function updateTerminalStatus(msg) {
-          document.getElementsByTagName("footer")[0].innerText = msg;
-      }
-      var term = new Terminal({scrollback: 15000, smoothScrollDuration:125 });
-      var socket = new WebSocket(
-        (document.location.protocol === "http:" ? "ws://" : "wss://") +
-        document.location.host +
-        document.location.pathname +
-        "/ws");
+      (() => {
+        const statusElement = document.getElementById("job-status");
+        const statusLabel = document.getElementById("status-label");
+        const elapsedTime = document.getElementById("elapsed-time");
+        const emptyState = document.getElementById("empty-state");
+        const searchForm = document.getElementById("search-form");
+        const searchInput = document.getElementById("search-input");
+        const searchPrevious = document.getElementById("search-previous");
+        const jumpLatest = document.getElementById("jump-latest");
 
-      socket.onopen = function(event) {
-        updateTerminalStatus("Running...");
-      };
-      socket.onclose = function(event) {
-        updateTerminalStatus("Done");
-      };
+        const terminal = new Terminal({
+          cursorBlink: false,
+          disableStdin: true,
+          fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+          fontSize: 13,
+          lineHeight: 1.3,
+          scrollback: 15000,
+          theme: {
+            background: "#090c11",
+            foreground: "#dce5ee",
+            cursor: "#58d6c7",
+            selectionBackground: "#285c66",
+            black: "#11161e",
+            brightBlack: "#64748b",
+            red: "#ff7b86",
+            brightRed: "#ff98a1",
+            green: "#5ee2a0",
+            brightGreen: "#80edb7",
+            yellow: "#f5c96a",
+            brightYellow: "#f8d98e",
+            blue: "#76a9fa",
+            brightBlue: "#9fc1fb",
+            magenta: "#c99bff",
+            brightMagenta: "#d9baff",
+            cyan: "#58d6c7",
+            brightCyan: "#86e3d8",
+            white: "#dce5ee",
+            brightWhite: "#ffffff"
+          }
+        });
+        const fitAddon = new FitAddon.FitAddon();
+        const searchAddon = new SearchAddon.SearchAddon();
+        terminal.loadAddon(fitAddon);
+        terminal.loadAddon(searchAddon);
+        terminal.open(document.getElementById("terminal"));
+        fitAddon.fit();
 
-      window.addEventListener("unload", function(event) {
-        websocket.close();
-      })
-      var attachAddon = new AttachAddon.AttachAddon(socket);
-      var fitAddon = new FitAddon.FitAddon();
-      var searchAddon = new SearchAddon.SearchAddon();
-      var searchBarAddon = new SearchBarAddon.SearchBarAddon({searchAddon});
-      term.loadAddon(attachAddon);
-      term.loadAddon(fitAddon);
-      term.loadAddon(searchAddon);
-      term.loadAddon(searchBarAddon);
-      term.open(document.getElementById("terminal"));
-      searchBarAddon.show();
-      fitAddon.fit();
-      window.addEventListener("resize", () => fitAddon.fit());
+        const startedAt = Date.now();
+        let completionReceived = false;
+        let outputVisible = false;
+
+        const setStatus = (status, label) => {
+          statusElement.dataset.status = status;
+          statusLabel.textContent = label;
+        };
+
+        const formatDuration = (duration) => {
+          const seconds = Math.max(0, Math.floor(duration / 1000));
+          if (seconds < 60) return `${seconds}s`;
+          const minutes = Math.floor(seconds / 60);
+          const remainingSeconds = seconds % 60;
+          if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
+          const hours = Math.floor(minutes / 60);
+          return `${hours}h ${minutes % 60}m`;
+        };
+
+        const elapsedTimer = window.setInterval(() => {
+          elapsedTime.textContent = formatDuration(Date.now() - startedAt);
+        }, 1000);
+
+        const queueOutput = (output) => {
+          if (!outputVisible) {
+            outputVisible = true;
+            emptyState.hidden = true;
+          }
+          terminal.write(output);
+        };
+
+        const complete = (status) => {
+          completionReceived = true;
+          window.clearInterval(elapsedTimer);
+          elapsedTime.textContent = formatDuration(Date.now() - startedAt);
+          const statuses = {
+            succeeded: ["succeeded", "Succeeded"],
+            failed: ["failed", "Failed"],
+            finished: ["finished", "Finished"]
+          };
+          const [state, label] = statuses[status] || statuses.finished;
+          setStatus(state, label);
+        };
+
+        const socket = new WebSocket(
+          (document.location.protocol === "http:" ? "ws://" : "wss://") +
+          document.location.host +
+          document.location.pathname +
+          "/ws"
+        );
+        socket.binaryType = "arraybuffer";
+        const decoder = new TextDecoder();
+
+        socket.addEventListener("open", () => setStatus("running", "Running"));
+        socket.addEventListener("message", (event) => {
+          if (typeof event.data === "string") {
+            try {
+              const message = JSON.parse(event.data);
+              if (message.type === "complete") complete(message.status);
+            } catch (_error) {
+              setStatus("disconnected", "Invalid response");
+            }
+            return;
+          }
+          queueOutput(decoder.decode(event.data, { stream: true }));
+        });
+        socket.addEventListener("close", () => {
+          if (completionReceived) return;
+          window.clearInterval(elapsedTimer);
+          setStatus("disconnected", "Connection lost");
+        });
+
+        searchForm.addEventListener("submit", (event) => {
+          event.preventDefault();
+          if (searchInput.value) searchAddon.findNext(searchInput.value, { incremental: false });
+        });
+        searchPrevious.addEventListener("click", () => {
+          if (searchInput.value) searchAddon.findPrevious(searchInput.value, { incremental: false });
+        });
+        searchInput.addEventListener("input", () => {
+          if (searchInput.value) searchAddon.findNext(searchInput.value, { incremental: true });
+          else terminal.clearSelection();
+        });
+        jumpLatest.addEventListener("click", () => terminal.scrollToBottom());
+
+        window.addEventListener("keydown", (event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+            event.preventDefault();
+            searchInput.focus();
+            searchInput.select();
+          }
+        });
+        window.addEventListener("resize", () => fitAddon.fit());
+        window.addEventListener("beforeunload", () => socket.close());
+      })();
     </script>
   </body>
 </html>
