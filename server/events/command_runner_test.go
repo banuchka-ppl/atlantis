@@ -2043,8 +2043,9 @@ func TestRunCommentCommand_UnmatchedBranch(t *testing.T) {
 
 func TestRunUnlockCommand_VCSComment(t *testing.T) {
 	testCases := []struct {
-		name    string
-		prState *string
+		name               string
+		prState            *string
+		preWorkflowHookErr error
 	}{
 		{
 			name:    "PR open",
@@ -2055,6 +2056,11 @@ func TestRunUnlockCommand_VCSComment(t *testing.T) {
 			name:    "PR closed",
 			prState: github.Ptr("closed"),
 		},
+		{
+			name:               "PR open with failing pre-workflow hook",
+			prState:            github.Ptr("open"),
+			preWorkflowHookErr: errors.New("pre-workflow hook failed"),
+		},
 	}
 
 	for _, tc := range testCases {
@@ -2063,6 +2069,10 @@ func TestRunUnlockCommand_VCSComment(t *testing.T) {
 				" invoke the delete command and comment on PR accordingly", *tc.prState)
 
 			vcsClient := setup(t)
+			if tc.preWorkflowHookErr != nil {
+				ch.FailOnPreWorkflowHookError = true
+				When(preWorkflowHooksCommandRunner.RunPreHooks(Any[*command.Context](), Any[*events.CommentCommand]())).ThenReturn(tc.preWorkflowHookErr)
+			}
 			pull := &github.PullRequest{
 				State: tc.prState,
 			}
@@ -2075,6 +2085,9 @@ func TestRunUnlockCommand_VCSComment(t *testing.T) {
 			ch.RunCommentCommand(testdata.GithubRepo, &testdata.GithubRepo, nil, testdata.User, testdata.Pull.Num,
 				&events.CommentCommand{Name: command.Unlock})
 
+			if tc.preWorkflowHookErr != nil {
+				preWorkflowHooksCommandRunner.(*mocks.MockPreWorkflowHooksCommandRunner).VerifyWasCalled(Never()).RunPreHooks(Any[*command.Context](), Any[*events.CommentCommand]())
+			}
 			deleteLockCommand.VerifyWasCalledOnce().DeleteLocksByPull(Any[logging.SimpleLogging](),
 				Eq(testdata.GithubRepo.FullName), Eq(testdata.Pull.Num))
 			vcsClient.VerifyWasCalledOnce().CreateComment(

@@ -519,8 +519,14 @@ func (c *DefaultCommandRunner) RunCommentCommand(baseRepo models.Repo, maybeHead
 		return
 	}
 
-	preWorkflowHooksMayUpdateRepo := preWorkflowHooksConfigured(c.PreWorkflowHooksCommandRunner, ctx)
-	preWorkflowHooksErr := c.PreWorkflowHooksCommandRunner.RunPreHooks(ctx, cmd)
+	preWorkflowHooksMayUpdateRepo := false
+	var preWorkflowHooksErr error
+	// Unlock only mutates stored locks and plans, so it must remain available
+	// when checkout or pre-workflow hook execution is broken.
+	if cmd.Name != command.Unlock {
+		preWorkflowHooksMayUpdateRepo = preWorkflowHooksConfigured(c.PreWorkflowHooksCommandRunner, ctx)
+		preWorkflowHooksErr = c.PreWorkflowHooksCommandRunner.RunPreHooks(ctx, cmd)
+	}
 	if targetInitiallyIgnored {
 		ctx.CommandSkipped = false
 		if !preWorkflowHooksMayUpdateRepo {

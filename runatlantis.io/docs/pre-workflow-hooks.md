@@ -23,7 +23,9 @@ flag in the Atlantis server configuration.
 
 ## Atlantis Command Targeting
 
-By default, the workflow hook will run when any command is processed by Atlantis.
+By default, the workflow hook will run when any command except `unlock` is
+processed by Atlantis. The `unlock` command bypasses pre-workflow hooks so locks
+and plans can still be cleared when checkout or hook execution is broken.
 This can be modified by specifying the `commands` key in the workflow hook containing a comma-delimited list
 of Atlantis commands that the hook should be run for. Detail of the Atlantis commands
 can be found in [Using Atlantis](using-atlantis.md).
