@@ -706,7 +706,9 @@ atlantis server --fail-on-pre-workflow-hook-error
 ATLANTIS_FAIL_ON_PRE_WORKFLOW_HOOK_ERROR=true
 ```
 
-Fail and do not run the requested Atlantis command if any of the pre workflow hooks error.
+Fail and do not run the requested Atlantis command if any of its pre workflow
+hooks error. The `unlock` command bypasses pre-workflow hooks and is unaffected
+by this flag.
 
 ### `--gh-allow-mergeable-bypass-apply` <Badge text="v0.30.0+" type="info"/>
 
