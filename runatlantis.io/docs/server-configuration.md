@@ -1270,7 +1270,13 @@ ATLANTIS_PPLX_NATIVE_RESULT_COMMENT_MARKERS=true
 
 Fork-only hidden option that appends an invisible machine-readable marker to native Atlantis result comments. Defaults to `false`.
 
-This only tags comments for later lookup. It does not change comment creation, update, minimization, or splitting behavior by itself.
+The v2 marker records repository, pull request, head SHA, command, aggregate
+outcome, project total, and every project result. Project outcomes distinguish
+`no_changes`, `changes`, `success`, `failure`, `error`, and specific failure
+reasons such as `project_lock`. Consumers can therefore identify complete
+all-no-op plan results without parsing rendered Markdown.
+
+This only tags comments for later lookup. It does not change comment creation, update, minimization, or splitting behavior by itself. Consumers may continue to decode previously published v1 markers during migration.
 
 ### `--pplx-native-result-comment-upsert`
 

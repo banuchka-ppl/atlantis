@@ -51,6 +51,8 @@ func TestAppendNativeResultCommentMarker(t *testing.T) {
 	Equals(t, "prod", payload.ProjectName)
 	Equals(t, false, payload.Autoplan)
 	Equals(t, "success", payload.Outcome)
+	Equals(t, 0, payload.ProjectTotal)
+	Equals(t, 0, len(payload.Projects))
 	Equals(t, 0, len(payload.Failures))
 }
 
@@ -88,6 +90,27 @@ func TestNativeResultCommentMarkerRecordsProjectFailures(t *testing.T) {
 	payload := decodeNativeResultCommentMarkerForTest(t, marker)
 
 	Equals(t, "error", payload.Outcome)
+	Equals(t, 3, payload.ProjectTotal)
+	Equals(t, []nativeResultCommentMarkerProject{
+		{
+			Dir:         "infra/locked",
+			Workspace:   "default",
+			ProjectName: "locked",
+			Outcome:     "project_lock",
+		},
+		{
+			Dir:         "infra/broken",
+			Workspace:   "default",
+			ProjectName: "broken",
+			Outcome:     "error",
+		},
+		{
+			Dir:         "infra/success",
+			Workspace:   "default",
+			ProjectName: "success",
+			Outcome:     "changes",
+		},
+	}, payload.Projects)
 	Equals(t, []nativeResultCommentMarkerFailure{
 		{
 			Dir:             "infra/locked",
@@ -103,6 +126,50 @@ func TestNativeResultCommentMarkerRecordsProjectFailures(t *testing.T) {
 			Reason:      "error",
 		},
 	}, payload.Failures)
+}
+
+func TestNativeResultCommentMarkerRecordsNoChangeProjectOutcomes(t *testing.T) {
+	pull := testdata.Pull
+	pull.BaseRepo = testdata.GithubRepo
+	ctx := &command.Context{Pull: pull}
+	result := command.Result{ProjectResults: []command.ProjectResult{
+		{
+			ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{
+				TerraformOutput: "No changes. Your infrastructure matches the configuration.",
+			}},
+			RepoRelDir:  "infra/testing",
+			Workspace:   "default",
+			ProjectName: "testing",
+		},
+		{
+			ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{
+				TerraformOutput: "Plan: 0 to add, 1 to change, 0 to destroy.",
+			}},
+			RepoRelDir:  "infra/prod",
+			Workspace:   "default",
+			ProjectName: "prod",
+		},
+	}}
+
+	marker, err := encodeNativeResultCommentMarker(ctx, &CommentCommand{Name: command.Plan}, result)
+	Ok(t, err)
+	payload := decodeNativeResultCommentMarkerForTest(t, marker)
+
+	Equals(t, 2, payload.ProjectTotal)
+	Equals(t, []nativeResultCommentMarkerProject{
+		{
+			Dir:         "infra/testing",
+			Workspace:   "default",
+			ProjectName: "testing",
+			Outcome:     "no_changes",
+		},
+		{
+			Dir:         "infra/prod",
+			Workspace:   "default",
+			ProjectName: "prod",
+			Outcome:     "changes",
+		},
+	}, payload.Projects)
 }
 
 func TestPullUpdaterAddsNativeResultCommentMarkerWhenEnabled(t *testing.T) {
