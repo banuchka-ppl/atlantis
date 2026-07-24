@@ -100,6 +100,7 @@ type UserConfig struct {
 	PendingApplyStatus              bool   `mapstructure:"pending-apply-status"`
 	PPLXNativeResultCommentMarkers  bool   `mapstructure:"pplx-native-result-comment-markers"`
 	PPLXNativeResultCommentUpsert   bool   `mapstructure:"pplx-native-result-comment-upsert"`
+	PPLXStructuredRunResultsMode    string `mapstructure:"pplx-structured-run-results-mode"`
 	StatsNamespace                  string `mapstructure:"stats-namespace"`
 	PlanDrafts                      bool   `mapstructure:"allow-draft-prs"`
 	Port                            int    `mapstructure:"port"`

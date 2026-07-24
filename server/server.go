@@ -172,6 +172,10 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	if userConfig.EnableDriftRemediation && !userConfig.EnableDriftDetection {
 		return nil, errors.New("--enable-drift-remediation requires --enable-drift-detection")
 	}
+	structuredRunResultsMode, err := runtime.ParseStructuredRunResultMode(userConfig.PPLXStructuredRunResultsMode)
+	if err != nil {
+		return nil, err
+	}
 
 	logging.SuppressDefaultLogging()
 	logger, err := logging.NewStructuredLoggerFromLevel(userConfig.ToLogLevel())
@@ -649,11 +653,12 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	defaultTfVersion := terraformClient.DefaultVersion()
 	pendingPlanFinder := &events.DefaultPendingPlanFinder{}
 	runStepRunner := &runtime.RunStepRunner{
-		TerraformExecutor:       terraformClient,
-		DefaultTFDistribution:   defaultTfDistribution,
-		DefaultTFVersion:        defaultTfVersion,
-		TerraformBinDir:         terraformClient.TerraformBinDir(),
-		ProjectCmdOutputHandler: projectCmdOutputHandler,
+		TerraformExecutor:        terraformClient,
+		DefaultTFDistribution:    defaultTfDistribution,
+		DefaultTFVersion:         defaultTfVersion,
+		TerraformBinDir:          terraformClient.TerraformBinDir(),
+		ProjectCmdOutputHandler:  projectCmdOutputHandler,
+		StructuredRunResultsMode: structuredRunResultsMode,
 	}
 	drainer := &events.Drainer{}
 	statusController := &controllers.StatusController{

@@ -29,6 +29,48 @@ const noOpStepResultJSON = `{
 	}
 }`
 
+func TestParseStructuredRunResultMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		expected runtime.StructuredRunResultMode
+		err      string
+	}{
+		{
+			name:     "empty is off for zero-value callers",
+			value:    "",
+			expected: runtime.StructuredRunResultModeOff,
+		},
+		{
+			name:     "off",
+			value:    "off",
+			expected: runtime.StructuredRunResultModeOff,
+		},
+		{
+			name:     "shadow",
+			value:    "shadow",
+			expected: runtime.StructuredRunResultModeShadow,
+		},
+		{
+			name:  "unimplemented mode",
+			value: "prefer",
+			err:   `invalid structured run result mode "prefer": must be one of [off shadow]`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := runtime.ParseStructuredRunResultMode(test.value)
+			if test.err != "" {
+				ErrEquals(t, test.err, err)
+				return
+			}
+			Ok(t, err)
+			Equals(t, test.expected, actual)
+		})
+	}
+}
+
 func TestStructuredRunResultCompleterCompletesNoOpPlan(t *testing.T) {
 	workingDir := t.TempDir()
 	resultPath := filepath.Join(workingDir, "step-result.json")

@@ -19,7 +19,34 @@ const (
 	StepResultSchemaVersion = 1
 	// MaxStepResultBytes bounds structured custom-run result documents to one MiB.
 	MaxStepResultBytes = 1 << 20
+	// StepResultFileEnvVar tells a custom run step where it may publish a structured result.
+	StepResultFileEnvVar = "ATLANTIS_STEP_RESULT_FILE"
 )
+
+// StructuredRunResultMode controls whether custom run steps can publish structured results.
+type StructuredRunResultMode string
+
+const (
+	// StructuredRunResultModeOff leaves custom run step execution unchanged.
+	StructuredRunResultModeOff StructuredRunResultMode = "off"
+	// StructuredRunResultModeShadow validates optional results without changing command behavior.
+	StructuredRunResultModeShadow StructuredRunResultMode = "shadow"
+)
+
+// ParseStructuredRunResultMode validates a server-configured rollout mode.
+func ParseStructuredRunResultMode(value string) (StructuredRunResultMode, error) {
+	switch StructuredRunResultMode(value) {
+	case "", StructuredRunResultModeOff:
+		return StructuredRunResultModeOff, nil
+	case StructuredRunResultModeShadow:
+		return StructuredRunResultModeShadow, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid structured run result mode %q: must be one of [off shadow]",
+			value,
+		)
+	}
+}
 
 // StepResultOutcome describes whether the custom command itself completed successfully.
 type StepResultOutcome string

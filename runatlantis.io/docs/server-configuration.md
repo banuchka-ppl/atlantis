@@ -1290,6 +1290,27 @@ Fork-only hidden option that updates an existing marked native Atlantis result c
 
 This only applies to native result comments that fit in one GitHub comment. If the result would be split or truncated, Atlantis keeps the existing create-comment behavior and does not add a native result marker for that oversized result.
 
+### `--pplx-structured-run-results-mode`
+
+```bash
+atlantis server --pplx-structured-run-results-mode=shadow
+# or
+ATLANTIS_PPLX_STRUCTURED_RUN_RESULTS_MODE=shadow
+```
+
+Fork-only hidden option that controls the structured-result migration for custom
+run steps. Supported values are `off` and `shadow`. Defaults to `off`.
+
+In `shadow` mode, Atlantis gives each custom run step a unique
+`ATLANTIS_STEP_RESULT_FILE` path under the project working directory. A step may
+atomically publish a versioned JSON result at that path. Atlantis validates a
+published result and records validation failures in server logs, but continues
+to use the existing command output and process error as the authoritative
+result. Missing result files are expected while producers are migrating.
+
+Atlantis removes the per-step result directory after processing. Workflow
+environment configuration cannot override the path selected by Atlantis.
+
 ### `--quiet-policy-checks` <Badge text="v0.32.0+" type="info"/>
 
 ```bash

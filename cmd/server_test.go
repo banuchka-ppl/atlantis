@@ -124,6 +124,7 @@ var testFlags = map[string]any{
 	PendingApplyStatusFlag:           false,
 	PPLXNativeResultCommentMarkers:   false,
 	PPLXNativeResultCommentUpsert:    false,
+	PPLXStructuredRunResultsMode:     "shadow",
 	QuietPolicyChecks:                false,
 	RedisHost:                        "",
 	RedisInsecureSkipVerify:          false,
@@ -633,6 +634,20 @@ func TestExecute_ValidateAutomergeMethod(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExecute_ValidatePPLXStructuredRunResultsMode(t *testing.T) {
+	c := setupWithDefaults(map[string]any{
+		PPLXStructuredRunResultsMode: "prefer",
+	}, t)
+
+	err := c.Execute()
+
+	ErrEquals(
+		t,
+		`invalid --pplx-structured-run-results-mode: invalid structured run result mode "prefer": must be one of [off shadow]`,
+		err,
+	)
 }
 
 func TestExecute_ValidateSSLConfig(t *testing.T) {

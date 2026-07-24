@@ -121,6 +121,19 @@ func TestNewServer_EnableDriftRemediationRequiresDriftDetection(t *testing.T) {
 	ErrContains(t, "--enable-drift-remediation requires --enable-drift-detection", err)
 }
 
+func TestNewServer_RejectsUnimplementedStructuredRunResultMode(t *testing.T) {
+	_, err := server.NewServer(
+		server.UserConfig{PPLXStructuredRunResultsMode: "required"},
+		server.Config{},
+	)
+
+	ErrEquals(
+		t,
+		`invalid structured run result mode "required": must be one of [off shadow]`,
+		err,
+	)
+}
+
 // todo: test what happens if we set different flags. The generated config should be different.
 
 func TestNewServer_InvalidAtlantisURL(t *testing.T) {
