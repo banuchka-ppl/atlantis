@@ -121,6 +121,49 @@ func TestNewServer_EnableDriftRemediationRequiresDriftDetection(t *testing.T) {
 	ErrContains(t, "--enable-drift-remediation requires --enable-drift-detection", err)
 }
 
+func TestNewServer_RejectsUnimplementedStructuredRunResultMode(t *testing.T) {
+	_, err := server.NewServer(
+		server.UserConfig{PPLXStructuredRunResultsMode: "required"},
+		server.Config{},
+	)
+
+	ErrEquals(
+		t,
+		`invalid structured run result mode "required": must be one of [off shadow]`,
+		err,
+	)
+}
+
+func TestNewServer_RejectsInvalidStructuredRunResultWorkflowAllowlist(t *testing.T) {
+	_, err := server.NewServer(
+		server.UserConfig{
+			PPLXStructuredResultWorkflows: "terraform-just-[",
+		},
+		server.Config{},
+	)
+
+	ErrEquals(
+		t,
+		`invalid structured run result workflow pattern "terraform-just-[": syntax error in pattern`,
+		err,
+	)
+}
+
+func TestNewServer_RejectsInvalidStructuredRunResultRepoAllowlist(t *testing.T) {
+	_, err := server.NewServer(
+		server.UserConfig{
+			PPLXStructuredResultRepos: "ppl-ai/[",
+		},
+		server.Config{},
+	)
+
+	ErrEquals(
+		t,
+		`invalid structured run result repository pattern "ppl-ai/[": syntax error in pattern`,
+		err,
+	)
+}
+
 // todo: test what happens if we set different flags. The generated config should be different.
 
 func TestNewServer_InvalidAtlantisURL(t *testing.T) {

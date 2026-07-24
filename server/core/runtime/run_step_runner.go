@@ -6,6 +6,7 @@ package runtime
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -25,8 +26,11 @@ type RunStepRunner struct {
 	DefaultTFDistribution terraform.Distribution
 	DefaultTFVersion      *version.Version
 	// TerraformBinDir is the directory where Atlantis downloads Terraform binaries.
-	TerraformBinDir         string
-	ProjectCmdOutputHandler jobs.ProjectCommandOutputHandler
+	TerraformBinDir                     string
+	ProjectCmdOutputHandler             jobs.ProjectCommandOutputHandler
+	StructuredRunResultsMode            StructuredRunResultMode
+	StructuredRunResultRepoPatterns     []string
+	StructuredRunResultWorkflowPatterns []string
 }
 
 func (r *RunStepRunner) Run(
@@ -38,6 +42,30 @@ func (r *RunStepRunner) Run(
 	streamOutput bool,
 	postProcessOutput []valid.PostProcessRunOutputOption,
 	postProcessFilterRegexes []*regexp.Regexp,
+) (string, error) {
+	return r.run(
+		ctx,
+		shell,
+		command,
+		path,
+		envs,
+		streamOutput,
+		postProcessOutput,
+		postProcessFilterRegexes,
+		true,
+	)
+}
+
+func (r *RunStepRunner) run(
+	ctx command.ProjectContext,
+	shell *valid.CommandShell,
+	command string,
+	path string,
+	envs map[string]string,
+	streamOutput bool,
+	postProcessOutput []valid.PostProcessRunOutputOption,
+	postProcessFilterRegexes []*regexp.Regexp,
+	structuredResultEligible bool,
 ) (string, error) {
 	tfDistribution := r.DefaultTFDistribution
 	tfVersion := r.DefaultTFVersion
@@ -53,6 +81,11 @@ func (r *RunStepRunner) Run(
 		err = fmt.Errorf("%s: Downloading terraform Version %s", err, tfVersion.String())
 		ctx.Log.Debug("error: %s", err)
 		return "", err
+	}
+
+	structuredResult := r.prepareStructuredRunResult(ctx, path, structuredResultEligible)
+	if structuredResult != nil {
+		defer structuredResult.cleanup(ctx)
 	}
 
 	baseEnvVars := os.Environ()
@@ -93,6 +126,11 @@ func (r *RunStepRunner) Run(
 	for key, val := range envs {
 		finalEnvVars = append(finalEnvVars, fmt.Sprintf("%s=%s", key, val))
 	}
+	if structuredResult != nil {
+		// Append this last so a workflow-provided env cannot redirect Atlantis to
+		// read a result outside the directory it allocated.
+		finalEnvVars = append(finalEnvVars, fmt.Sprintf("%s=%s", StepResultFileEnvVar, structuredResult.resultPath))
+	}
 
 	runner := models.NewShellCommandRunner(shell, command, finalEnvVars, path, streamOutput, r.ProjectCmdOutputHandler)
 	output, err := runner.Run(ctx)
@@ -107,6 +145,15 @@ func (r *RunStepRunner) Run(
 				output = FilterRegexFromPlanOutput(output, filterRegexes)
 			}
 		}
+	}
+
+	if structuredResult != nil {
+		r.completeStructuredRunResult(
+			ctx,
+			path,
+			structuredResult.resultPath,
+			RunExecution{ConsoleOutput: output, Err: err},
+		)
 	}
 
 	if err != nil {
@@ -134,6 +181,82 @@ func (r *RunStepRunner) Run(
 	}
 
 	return output, nil
+}
+
+type structuredRunResultSession struct {
+	directory  string
+	resultPath string
+}
+
+func (r *RunStepRunner) prepareStructuredRunResult(
+	ctx command.ProjectContext,
+	workingDir string,
+	eligible bool,
+) *structuredRunResultSession {
+	if !eligible {
+		return nil
+	}
+	if r.StructuredRunResultsMode != StructuredRunResultModeShadow {
+		return nil
+	}
+	if ctx.CommandName != command.Plan && ctx.CommandName != command.Apply {
+		return nil
+	}
+	if !matchesAnyPattern(ctx.BaseRepo.FullName, r.StructuredRunResultRepoPatterns) {
+		return nil
+	}
+	if !matchesAnyPattern(ctx.WorkflowName, r.StructuredRunResultWorkflowPatterns) {
+		return nil
+	}
+
+	resultDir, err := os.MkdirTemp(workingDir, ".atlantis-step-result-")
+	if err != nil {
+		ctx.Log.Warn("unable to allocate structured run result path; continuing without shadow validation: %s", err)
+		return nil
+	}
+	return &structuredRunResultSession{
+		directory:  resultDir,
+		resultPath: filepath.Join(resultDir, "result.json"),
+	}
+}
+
+func matchesAnyPattern(value string, patterns []string) bool {
+	for _, pattern := range patterns {
+		matched, err := path.Match(pattern, value)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
+func (s structuredRunResultSession) cleanup(ctx command.ProjectContext) {
+	if err := os.RemoveAll(s.directory); err != nil {
+		ctx.Log.Warn("unable to clean up structured run result directory: %s", err)
+	}
+}
+
+func (r *RunStepRunner) completeStructuredRunResult(
+	ctx command.ProjectContext,
+	workingDir string,
+	resultPath string,
+	execution RunExecution,
+) {
+	if _, err := os.Lstat(resultPath); err != nil {
+		if os.IsNotExist(err) {
+			ctx.Log.Debug("custom run step did not publish an optional structured result")
+			return
+		}
+		ctx.Log.Warn("unable to inspect optional structured run result; legacy command result is unchanged: %s", err)
+		return
+	}
+
+	completed, err := (StructuredRunResultCompleter{}).CompleteRun(workingDir, resultPath, execution)
+	if err != nil {
+		ctx.Log.Warn("invalid optional structured run result; legacy command result is unchanged: %s", err)
+		return
+	}
+	ctx.Log.Debug("validated optional structured run result with outcome %q", completed.Result.Outcome)
 }
 
 type runStepError struct {

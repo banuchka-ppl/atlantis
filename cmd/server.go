@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/runatlantis/atlantis/server"
+	"github.com/runatlantis/atlantis/server/core/runtime"
 	"github.com/runatlantis/atlantis/server/events/vcs/bitbucketcloud"
 	"github.com/runatlantis/atlantis/server/i18n"
 	"github.com/runatlantis/atlantis/server/logging"
@@ -122,6 +123,9 @@ const (
 	PendingApplyStatusFlag           = "pending-apply-status"
 	PPLXNativeResultCommentMarkers   = "pplx-native-result-comment-markers"
 	PPLXNativeResultCommentUpsert    = "pplx-native-result-comment-upsert"
+	PPLXStructuredRunResultsMode     = "pplx-structured-run-results-mode"
+	PPLXStructuredResultRepos        = "pplx-structured-run-results-repo-allowlist"
+	PPLXStructuredResultWorkflows    = "pplx-structured-run-results-workflow-allowlist"
 	StatsNamespace                   = "stats-namespace"
 	AllowDraftPRs                    = "allow-draft-prs"
 	PortFlag                         = "port"
@@ -192,6 +196,7 @@ const (
 	DefaultIgnoreVCSStatusNames         = ""
 	DefaultMaxCommentsPerCommand        = 100
 	DefaultParallelPoolSize             = 15
+	DefaultPPLXStructuredRunResultsMode = "off"
 	DefaultStatsNamespace               = "atlantis"
 	DefaultPort                         = 4141
 	DefaultRedisDB                      = 0
@@ -510,6 +515,19 @@ var stringFlags = map[string]stringFlag{
 	LanguageConfigFileFlag: {
 		description: "Optional path to a custom YAML language catalog that overrides built-in localized strings. " +
 			"Supports partial overrides and can be combined with --language.",
+	},
+	PPLXStructuredRunResultsMode: {
+		description:  "Fork-only rollout mode for optional structured custom-run results. Supported values: off, shadow.",
+		defaultValue: DefaultPPLXStructuredRunResultsMode,
+		hidden:       true,
+	},
+	PPLXStructuredResultRepos: {
+		description: "Fork-only comma-separated repository glob allowlist for optional structured custom-run results.",
+		hidden:      true,
+	},
+	PPLXStructuredResultWorkflows: {
+		description: "Fork-only comma-separated workflow glob allowlist for optional structured custom-run results.",
+		hidden:      true,
 	},
 	VCSStatusName: {
 		description:  "Name used to identify Atlantis for pull request statuses.",
@@ -1032,6 +1050,9 @@ func (s *ServerCmd) setDefaults(c *server.UserConfig, v *viper.Viper) {
 	if c.ParallelPoolSize == 0 {
 		c.ParallelPoolSize = DefaultParallelPoolSize
 	}
+	if c.PPLXStructuredRunResultsMode == "" {
+		c.PPLXStructuredRunResultsMode = DefaultPPLXStructuredRunResultsMode
+	}
 	if c.StatsNamespace == "" {
 		c.StatsNamespace = DefaultStatsNamespace
 	}
@@ -1103,6 +1124,15 @@ func (s *ServerCmd) validate(userConfig server.UserConfig) error {
 
 	if userConfig.AutomergeMethod != "" && !slices.Contains(ValidAutomergeMethods, userConfig.AutomergeMethod) {
 		return fmt.Errorf("invalid --%s: must be one of %v", AutomergeMethodFlag, ValidAutomergeMethods)
+	}
+	if _, err := runtime.ParseStructuredRunResultMode(userConfig.PPLXStructuredRunResultsMode); err != nil {
+		return fmt.Errorf("invalid --%s: %w", PPLXStructuredRunResultsMode, err)
+	}
+	if _, err := runtime.ParseStructuredRunResultRepoPatterns(userConfig.PPLXStructuredResultRepos); err != nil {
+		return fmt.Errorf("invalid --%s: %w", PPLXStructuredResultRepos, err)
+	}
+	if _, err := runtime.ParseStructuredRunResultWorkflowPatterns(userConfig.PPLXStructuredResultWorkflows); err != nil {
+		return fmt.Errorf("invalid --%s: %w", PPLXStructuredResultWorkflows, err)
 	}
 
 	if (userConfig.SSLKeyFile == "") != (userConfig.SSLCertFile == "") {

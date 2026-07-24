@@ -124,6 +124,9 @@ var testFlags = map[string]any{
 	PendingApplyStatusFlag:           false,
 	PPLXNativeResultCommentMarkers:   false,
 	PPLXNativeResultCommentUpsert:    false,
+	PPLXStructuredResultRepos:        "ppl-ai/agi",
+	PPLXStructuredResultWorkflows:    "terraform-just-*,terraform-delete-module",
+	PPLXStructuredRunResultsMode:     "shadow",
 	QuietPolicyChecks:                false,
 	RedisHost:                        "",
 	RedisInsecureSkipVerify:          false,
@@ -633,6 +636,48 @@ func TestExecute_ValidateAutomergeMethod(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExecute_ValidatePPLXStructuredRunResultsMode(t *testing.T) {
+	c := setupWithDefaults(map[string]any{
+		PPLXStructuredRunResultsMode: "prefer",
+	}, t)
+
+	err := c.Execute()
+
+	ErrEquals(
+		t,
+		`invalid --pplx-structured-run-results-mode: invalid structured run result mode "prefer": must be one of [off shadow]`,
+		err,
+	)
+}
+
+func TestExecute_ValidatePPLXStructuredRunResultsWorkflowAllowlist(t *testing.T) {
+	c := setupWithDefaults(map[string]any{
+		PPLXStructuredResultWorkflows: "terraform-just-[",
+	}, t)
+
+	err := c.Execute()
+
+	ErrEquals(
+		t,
+		`invalid --pplx-structured-run-results-workflow-allowlist: invalid structured run result workflow pattern "terraform-just-[": syntax error in pattern`,
+		err,
+	)
+}
+
+func TestExecute_ValidatePPLXStructuredRunResultsRepoAllowlist(t *testing.T) {
+	c := setupWithDefaults(map[string]any{
+		PPLXStructuredResultRepos: "ppl-ai/[",
+	}, t)
+
+	err := c.Execute()
+
+	ErrEquals(
+		t,
+		`invalid --pplx-structured-run-results-repo-allowlist: invalid structured run result repository pattern "ppl-ai/[": syntax error in pattern`,
+		err,
+	)
 }
 
 func TestExecute_ValidateSSLConfig(t *testing.T) {

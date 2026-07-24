@@ -1290,6 +1290,61 @@ Fork-only hidden option that updates an existing marked native Atlantis result c
 
 This only applies to native result comments that fit in one GitHub comment. If the result would be split or truncated, Atlantis keeps the existing create-comment behavior and does not add a native result marker for that oversized result.
 
+### `--pplx-structured-run-results-mode`
+
+```bash
+atlantis server --pplx-structured-run-results-mode=shadow
+# or
+ATLANTIS_PPLX_STRUCTURED_RUN_RESULTS_MODE=shadow
+```
+
+Fork-only hidden option that controls the structured-result migration for custom
+run steps. Supported values are `off` and `shadow`. Defaults to `off`.
+
+In `shadow` mode, Atlantis gives eligible plan/apply custom run steps a unique
+`ATLANTIS_STEP_RESULT_FILE` path under the project working directory. Eligibility
+requires explicit matches in both
+`--pplx-structured-run-results-repo-allowlist` and
+`--pplx-structured-run-results-workflow-allowlist`. A step may atomically
+publish a versioned JSON result at that path. Atlantis validates a published
+result and records validation failures in server logs, but continues to use the
+existing command output and process error as the authoritative result. Missing
+result files are expected while producers are migrating.
+
+Atlantis removes the per-step result directory after processing. Workflow
+environment configuration cannot override the path selected by Atlantis.
+
+### `--pplx-structured-run-results-repo-allowlist`
+
+```bash
+atlantis server --pplx-structured-run-results-repo-allowlist='ppl-ai/agi'
+# or
+ATLANTIS_PPLX_STRUCTURED_RUN_RESULTS_REPO_ALLOWLIST='ppl-ai/agi'
+```
+
+Fork-only hidden option containing comma-separated repository glob patterns
+eligible for structured run results. Patterns match Atlantis's resolved base
+repository full name, such as `ppl-ai/agi`. Defaults to an empty allowlist.
+
+### `--pplx-structured-run-results-workflow-allowlist`
+
+```bash
+atlantis server \
+  --pplx-structured-run-results-workflow-allowlist='terraform-just-*,terraform-delete-module'
+# or
+ATLANTIS_PPLX_STRUCTURED_RUN_RESULTS_WORKFLOW_ALLOWLIST='terraform-just-*,terraform-delete-module'
+```
+
+Fork-only hidden option containing comma-separated workflow glob patterns that
+are eligible for structured run results. Defaults to an empty allowlist.
+
+Patterns use Go path-match syntax and match the resolved workflow name. Only
+custom `run` steps in plan/apply commands are eligible; `env`, `multienv`,
+policy-check, import, and state commands remain on the legacy path.
+
+Both repository and workflow allowlists must match. Setting the rollout mode to
+`shadow` alone does not expose a result path.
+
 ### `--quiet-policy-checks` <Badge text="v0.32.0+" type="info"/>
 
 ```bash
