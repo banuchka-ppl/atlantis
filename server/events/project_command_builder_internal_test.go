@@ -731,6 +731,8 @@ projects:
 
 					// Job ID cannot be compared since its generated at random
 					ctx.JobID = ""
+					// Workflow propagation is covered by the context builder test.
+					ctx.WorkflowName = ""
 
 					Equals(t, c.expCtx, ctx)
 					// Equals() doesn't compare TF version properly so have to
@@ -951,6 +953,8 @@ projects:
 
 					// Job ID cannot be compared since its generated at random
 					ctx.JobID = ""
+					// Workflow propagation is covered by the context builder test.
+					ctx.WorkflowName = ""
 
 					Equals(t, c.expCtx, ctx)
 					// Equals() doesn't compare TF version properly so have to
@@ -1195,6 +1199,8 @@ workflows:
 
 				// Job ID cannot be compared since its generated at random
 				ctx.JobID = ""
+				// Workflow propagation is covered by the context builder test.
+				ctx.WorkflowName = ""
 
 				Equals(t, c.expCtx, ctx)
 				// Equals() doesn't compare TF version properly so have to

@@ -66,6 +66,7 @@ func TestProjectCommandContextBuilder_PullStatus(t *testing.T) {
 
 		result := subject.BuildProjectContext(commandCtx, command.Plan, "", projCfg, []string{}, "some/dir", false, false, false, false, false, terraformClient)
 		assert.Equal(t, models.ErroredPolicyCheckStatus, result[0].ProjectPlanStatus)
+		assert.Equal(t, valid.DefaultWorkflowName, result[0].WorkflowName)
 	})
 
 	t.Run("with no project name defined", func(t *testing.T) {

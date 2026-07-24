@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -46,6 +47,36 @@ func ParseStructuredRunResultMode(value string) (StructuredRunResultMode, error)
 			value,
 		)
 	}
+}
+
+// ParseStructuredRunResultWorkflowPatterns validates comma-separated workflow globs.
+func ParseStructuredRunResultWorkflowPatterns(value string) ([]string, error) {
+	return parseStructuredRunResultPatterns(value, "workflow")
+}
+
+// ParseStructuredRunResultRepoPatterns validates comma-separated repository globs.
+func ParseStructuredRunResultRepoPatterns(value string) ([]string, error) {
+	return parseStructuredRunResultPatterns(value, "repository")
+}
+
+func parseStructuredRunResultPatterns(value string, kind string) ([]string, error) {
+	var patterns []string
+	for _, rawPattern := range strings.Split(value, ",") {
+		pattern := strings.TrimSpace(rawPattern)
+		if pattern == "" {
+			continue
+		}
+		if _, err := path.Match(pattern, ""); err != nil {
+			return nil, fmt.Errorf(
+				"invalid structured run result %s pattern %q: %w",
+				kind,
+				pattern,
+				err,
+			)
+		}
+		patterns = append(patterns, pattern)
+	}
+	return patterns, nil
 }
 
 // StepResultOutcome describes whether the custom command itself completed successfully.

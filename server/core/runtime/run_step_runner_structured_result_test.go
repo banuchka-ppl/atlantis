@@ -15,11 +15,22 @@ import (
 	"github.com/runatlantis/atlantis/server/core/terraform/mocks"
 	tfclientmocks "github.com/runatlantis/atlantis/server/core/terraform/tfclient/mocks"
 	"github.com/runatlantis/atlantis/server/events/command"
+	"github.com/runatlantis/atlantis/server/events/models"
 	jobmocks "github.com/runatlantis/atlantis/server/jobs/mocks"
 	"github.com/runatlantis/atlantis/server/logging"
 	loggingmocks "github.com/runatlantis/atlantis/server/logging/mocks"
 	. "github.com/runatlantis/atlantis/testing"
 )
+
+const pplxManagedWorkflow = "terraform-just-a1b2c3d4e5f6"
+const pplxManagedRepo = "ppl-ai/agi"
+
+var pplxManagedWorkflowPatterns = []string{
+	"terraform-delete-module",
+	"terraform-just-*",
+}
+
+var pplxManagedRepoPatterns = []string{"ppl-ai/agi"}
 
 func TestRunStepRunner_StructuredResultOffDoesNotExposePath(t *testing.T) {
 	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeOff)
@@ -119,6 +130,106 @@ func TestRunStepRunner_ShadowDoesNotChangeLegacyError(t *testing.T) {
 	assertNoStructuredResultDirectories(t, workingDir)
 }
 
+func TestRunStepRunner_ShadowDoesNotExposePathOutsideScope(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*runtime.RunStepRunner, *command.ProjectContext)
+	}{
+		{
+			name: "workflow is not allowlisted",
+			configure: func(_ *runtime.RunStepRunner, ctx *command.ProjectContext) {
+				ctx.WorkflowName = "repo-defined-workflow"
+			},
+		},
+		{
+			name: "workflow allowlist is empty",
+			configure: func(runner *runtime.RunStepRunner, _ *command.ProjectContext) {
+				runner.StructuredRunResultWorkflowPatterns = nil
+			},
+		},
+		{
+			name: "repository is not allowlisted",
+			configure: func(_ *runtime.RunStepRunner, ctx *command.ProjectContext) {
+				ctx.BaseRepo.FullName = "another-org/repo"
+			},
+		},
+		{
+			name: "repository allowlist is empty",
+			configure: func(runner *runtime.RunStepRunner, _ *command.ProjectContext) {
+				runner.StructuredRunResultRepoPatterns = nil
+			},
+		},
+		{
+			name: "command is not plan or apply",
+			configure: func(_ *runtime.RunStepRunner, ctx *command.ProjectContext) {
+				ctx.CommandName = command.PolicyCheck
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeShadow)
+			test.configure(&runner, &ctx)
+			workingDir := t.TempDir()
+
+			output, err := runner.Run(
+				ctx,
+				nil,
+				`if [ -z "${ATLANTIS_STEP_RESULT_FILE+x}" ]; then printf 'legacy\n'; else printf 'exposed\n'; fi`,
+				workingDir,
+				nil,
+				false,
+				nil,
+				nil,
+			)
+
+			Ok(t, err)
+			Equals(t, "legacy\n", output)
+			assertNoStructuredResultDirectories(t, workingDir)
+		})
+	}
+}
+
+func TestEnvStepRunner_ShadowDoesNotExposeStructuredResultPath(t *testing.T) {
+	runStepRunner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeShadow)
+	envStepRunner := runtime.EnvStepRunner{RunStepRunner: &runStepRunner}
+	workingDir := t.TempDir()
+
+	value, err := envStepRunner.Run(
+		ctx,
+		nil,
+		`if [ -z "${ATLANTIS_STEP_RESULT_FILE+x}" ]; then printf 'value\n'; else printf 'exposed\n'; fi`,
+		"",
+		workingDir,
+		nil,
+	)
+
+	Ok(t, err)
+	Equals(t, "value", value)
+	assertNoStructuredResultDirectories(t, workingDir)
+}
+
+func TestMultiEnvStepRunner_ShadowDoesNotExposeStructuredResultPath(t *testing.T) {
+	runStepRunner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeShadow)
+	multiEnvStepRunner := runtime.MultiEnvStepRunner{RunStepRunner: &runStepRunner}
+	workingDir := t.TempDir()
+	envs := make(map[string]string)
+
+	_, err := multiEnvStepRunner.Run(
+		ctx,
+		nil,
+		`if [ -z "${ATLANTIS_STEP_RESULT_FILE+x}" ]; then printf 'KEY=value\n'; else printf 'KEY=exposed\n'; fi`,
+		workingDir,
+		envs,
+		nil,
+	)
+
+	Ok(t, err)
+	Equals(t, map[string]string{"KEY": "value"}, envs)
+	assertNoStructuredResultDirectories(t, workingDir)
+}
+
 func newStructuredResultRunStepRunner(
 	t *testing.T,
 	mode runtime.StructuredRunResultMode,
@@ -135,14 +246,19 @@ func newStructuredResultRunStepRunner(
 	Ok(t, err)
 
 	return runtime.RunStepRunner{
-			TerraformExecutor:        terraformExecutor,
-			DefaultTFDistribution:    tf.NewDistributionTerraformWithDownloader(mocks.NewMockDownloader()),
-			DefaultTFVersion:         defaultVersion,
-			TerraformBinDir:          "/bin",
-			ProjectCmdOutputHandler:  jobmocks.NewMockProjectCommandOutputHandler(),
-			StructuredRunResultsMode: mode,
+			TerraformExecutor:                   terraformExecutor,
+			DefaultTFDistribution:               tf.NewDistributionTerraformWithDownloader(mocks.NewMockDownloader()),
+			DefaultTFVersion:                    defaultVersion,
+			TerraformBinDir:                     "/bin",
+			ProjectCmdOutputHandler:             jobmocks.NewMockProjectCommandOutputHandler(),
+			StructuredRunResultsMode:            mode,
+			StructuredRunResultRepoPatterns:     pplxManagedRepoPatterns,
+			StructuredRunResultWorkflowPatterns: pplxManagedWorkflowPatterns,
 		}, command.ProjectContext{
-			Log: logging.NewNoopLogger(t),
+			CommandName:  command.Plan,
+			WorkflowName: pplxManagedWorkflow,
+			BaseRepo:     models.Repo{FullName: pplxManagedRepo},
+			Log:          logging.NewNoopLogger(t),
 		}
 }
 

@@ -124,6 +124,8 @@ const (
 	PPLXNativeResultCommentMarkers   = "pplx-native-result-comment-markers"
 	PPLXNativeResultCommentUpsert    = "pplx-native-result-comment-upsert"
 	PPLXStructuredRunResultsMode     = "pplx-structured-run-results-mode"
+	PPLXStructuredResultRepos        = "pplx-structured-run-results-repo-allowlist"
+	PPLXStructuredResultWorkflows    = "pplx-structured-run-results-workflow-allowlist"
 	StatsNamespace                   = "stats-namespace"
 	AllowDraftPRs                    = "allow-draft-prs"
 	PortFlag                         = "port"
@@ -518,6 +520,14 @@ var stringFlags = map[string]stringFlag{
 		description:  "Fork-only rollout mode for optional structured custom-run results. Supported values: off, shadow.",
 		defaultValue: DefaultPPLXStructuredRunResultsMode,
 		hidden:       true,
+	},
+	PPLXStructuredResultRepos: {
+		description: "Fork-only comma-separated repository glob allowlist for optional structured custom-run results.",
+		hidden:      true,
+	},
+	PPLXStructuredResultWorkflows: {
+		description: "Fork-only comma-separated workflow glob allowlist for optional structured custom-run results.",
+		hidden:      true,
 	},
 	VCSStatusName: {
 		description:  "Name used to identify Atlantis for pull request statuses.",
@@ -1117,6 +1127,12 @@ func (s *ServerCmd) validate(userConfig server.UserConfig) error {
 	}
 	if _, err := runtime.ParseStructuredRunResultMode(userConfig.PPLXStructuredRunResultsMode); err != nil {
 		return fmt.Errorf("invalid --%s: %w", PPLXStructuredRunResultsMode, err)
+	}
+	if _, err := runtime.ParseStructuredRunResultRepoPatterns(userConfig.PPLXStructuredResultRepos); err != nil {
+		return fmt.Errorf("invalid --%s: %w", PPLXStructuredResultRepos, err)
+	}
+	if _, err := runtime.ParseStructuredRunResultWorkflowPatterns(userConfig.PPLXStructuredResultWorkflows); err != nil {
+		return fmt.Errorf("invalid --%s: %w", PPLXStructuredResultWorkflows, err)
 	}
 
 	if (userConfig.SSLKeyFile == "") != (userConfig.SSLCertFile == "") {

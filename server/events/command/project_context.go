@@ -94,6 +94,8 @@ type ProjectContext struct {
 	// ProjectName is the name of the project set in atlantis.yaml. If there was
 	// no name this will be an empty string.
 	ProjectName string
+	// WorkflowName is the resolved workflow selected for this project.
+	WorkflowName string
 	// RepoConfigVersion is the version of the repo's atlantis.yaml file. If
 	// there was no file, this will be 0.
 	RepoConfigVersion int

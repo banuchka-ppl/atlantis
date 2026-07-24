@@ -71,6 +71,57 @@ func TestParseStructuredRunResultMode(t *testing.T) {
 	}
 }
 
+func TestParseStructuredRunResultWorkflowPatterns(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		expected []string
+		err      string
+	}{
+		{
+			name: "empty disables all workflows",
+		},
+		{
+			name:     "comma-separated patterns",
+			value:    " terraform-just-* , terraform-delete-module ",
+			expected: []string{"terraform-just-*", "terraform-delete-module"},
+		},
+		{
+			name:  "invalid glob",
+			value: "terraform-just-[",
+			err:   `invalid structured run result workflow pattern "terraform-just-[": syntax error in pattern`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := runtime.ParseStructuredRunResultWorkflowPatterns(test.value)
+			if test.err != "" {
+				ErrEquals(t, test.err, err)
+				return
+			}
+			Ok(t, err)
+			Equals(t, test.expected, actual)
+		})
+	}
+}
+
+func TestParseStructuredRunResultRepoPatterns(t *testing.T) {
+	patterns, err := runtime.ParseStructuredRunResultRepoPatterns(
+		" ppl-ai/agi , ppl-ai/terraform-* ",
+	)
+
+	Ok(t, err)
+	Equals(t, []string{"ppl-ai/agi", "ppl-ai/terraform-*"}, patterns)
+
+	_, err = runtime.ParseStructuredRunResultRepoPatterns("ppl-ai/[")
+	ErrEquals(
+		t,
+		`invalid structured run result repository pattern "ppl-ai/[": syntax error in pattern`,
+		err,
+	)
+}
+
 func TestStructuredRunResultCompleterCompletesNoOpPlan(t *testing.T) {
 	workingDir := t.TempDir()
 	resultPath := filepath.Join(workingDir, "step-result.json")

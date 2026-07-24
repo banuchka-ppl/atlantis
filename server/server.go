@@ -176,6 +176,18 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	structuredRunResultRepoPatterns, err := runtime.ParseStructuredRunResultRepoPatterns(
+		userConfig.PPLXStructuredResultRepos,
+	)
+	if err != nil {
+		return nil, err
+	}
+	structuredRunResultWorkflowPatterns, err := runtime.ParseStructuredRunResultWorkflowPatterns(
+		userConfig.PPLXStructuredResultWorkflows,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	logging.SuppressDefaultLogging()
 	logger, err := logging.NewStructuredLoggerFromLevel(userConfig.ToLogLevel())
@@ -653,12 +665,14 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	defaultTfVersion := terraformClient.DefaultVersion()
 	pendingPlanFinder := &events.DefaultPendingPlanFinder{}
 	runStepRunner := &runtime.RunStepRunner{
-		TerraformExecutor:        terraformClient,
-		DefaultTFDistribution:    defaultTfDistribution,
-		DefaultTFVersion:         defaultTfVersion,
-		TerraformBinDir:          terraformClient.TerraformBinDir(),
-		ProjectCmdOutputHandler:  projectCmdOutputHandler,
-		StructuredRunResultsMode: structuredRunResultsMode,
+		TerraformExecutor:                   terraformClient,
+		DefaultTFDistribution:               defaultTfDistribution,
+		DefaultTFVersion:                    defaultTfVersion,
+		TerraformBinDir:                     terraformClient.TerraformBinDir(),
+		ProjectCmdOutputHandler:             projectCmdOutputHandler,
+		StructuredRunResultsMode:            structuredRunResultsMode,
+		StructuredRunResultRepoPatterns:     structuredRunResultRepoPatterns,
+		StructuredRunResultWorkflowPatterns: structuredRunResultWorkflowPatterns,
 	}
 	drainer := &events.Drainer{}
 	statusController := &controllers.StatusController{
