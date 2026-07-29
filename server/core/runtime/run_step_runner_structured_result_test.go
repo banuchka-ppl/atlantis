@@ -141,7 +141,7 @@ func TestRunStepRunner_ShadowRecordsOnlyLowCardinalityComparisonMetrics(t *testi
 	ctx.BaseRepo.FullName = pplxManagedRepo
 	workingDir := t.TempDir()
 	command := fmt.Sprintf(
-		`printf '%%s' '%s' > "$%s"; printf 'Plan: 1 to add, 0 to change, 0 to destroy.\n'`,
+		`printf 'safe review metadata' > "$DIR/review.txt"; printf '%%s' '%s' > "$%s"; printf 'Plan: 1 to add, 0 to change, 0 to destroy.\n'`,
 		`{"schema_version":1,"outcome":"success","changes":{"has_changes":true,"has_output_only_changes":false,"add":1,"change":0,"destroy":0,"import":0,"forget":0},"review":{"detail_mode":"inline","inline_detail_path":"review.txt"}}`,
 		runtime.StepResultFileEnvVar,
 	)
