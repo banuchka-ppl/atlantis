@@ -197,7 +197,7 @@ func TestStructuredRunResultCompleterRejectsSymlinkedParent(t *testing.T) {
 		runtime.RunExecution{},
 	)
 
-	ErrContains(t, "structured run result path resolves outside the working directory", err)
+	ErrContains(t, "inspecting structured run result", err)
 }
 
 func TestStructuredRunResultCompleterRejectsInvalidSchema(t *testing.T) {
@@ -445,8 +445,16 @@ func TestStructuredRunResultCompleterRejectsInvalidResultSemantics(t *testing.T)
 
 func TestStructuredRunResultCompleterCompletesChangedPlan(t *testing.T) {
 	workingDir := t.TempDir()
+	err := os.Mkdir(filepath.Join(workingDir, ".atlantis"), 0o700)
+	Ok(t, err)
+	err = os.WriteFile(
+		filepath.Join(workingDir, ".atlantis", "plan-review.txt"),
+		[]byte("safe review metadata"),
+		0o600,
+	)
+	Ok(t, err)
 	resultPath := filepath.Join(workingDir, "step-result.json")
-	err := os.WriteFile(resultPath, []byte(`{
+	err = os.WriteFile(resultPath, []byte(`{
 		"schema_version": 1,
 		"outcome": "success",
 		"summary": "Plan: 2 to add, 1 to change, 0 to destroy.",
@@ -498,8 +506,16 @@ func TestStructuredRunResultCompleterCompletesChangedPlan(t *testing.T) {
 
 func TestStructuredRunResultCompleterCompletesErroredRun(t *testing.T) {
 	workingDir := t.TempDir()
+	err := os.Mkdir(filepath.Join(workingDir, ".atlantis"), 0o700)
+	Ok(t, err)
+	err = os.WriteFile(
+		filepath.Join(workingDir, ".atlantis", "plan-error.txt"),
+		[]byte("safe diagnostic metadata"),
+		0o600,
+	)
+	Ok(t, err)
 	resultPath := filepath.Join(workingDir, "step-result.json")
-	err := os.WriteFile(resultPath, []byte(`{
+	err = os.WriteFile(resultPath, []byte(`{
 		"schema_version": 1,
 		"outcome": "error",
 		"summary": "Terraform plan failed.",
@@ -536,6 +552,119 @@ func TestStructuredRunResultCompleterCompletesErroredRun(t *testing.T) {
 			},
 		},
 	}, completion)
+}
+
+func TestStructuredRunResultCompleterRejectsInvalidReferencedFiles(t *testing.T) {
+	commandError := errors.New("exit status 1")
+	tests := []struct {
+		name      string
+		result    string
+		execution runtime.RunExecution
+		setup     func(t *testing.T, workingDir string)
+		expected  string
+	}{
+		{
+			name: "missing review detail",
+			result: changedStepResultJSON(`{
+				"detail_mode": "inline",
+				"inline_detail_path": "missing-review.txt"
+			}`),
+			expected: "inspecting structured run result review detail",
+		},
+		{
+			name: "review detail is a directory",
+			result: changedStepResultJSON(`{
+				"detail_mode": "inline",
+				"inline_detail_path": "review"
+			}`),
+			setup: func(t *testing.T, workingDir string) {
+				t.Helper()
+				Ok(t, os.Mkdir(filepath.Join(workingDir, "review"), 0o700))
+			},
+			expected: "structured run result review detail must be a regular file",
+		},
+		{
+			name: "review detail is a symlink",
+			result: changedStepResultJSON(`{
+				"detail_mode": "inline",
+				"inline_detail_path": "review.txt"
+			}`),
+			setup: func(t *testing.T, workingDir string) {
+				t.Helper()
+				target := filepath.Join(workingDir, "review-target.txt")
+				Ok(t, os.WriteFile(target, []byte("review"), 0o600))
+				Ok(t, os.Symlink(target, filepath.Join(workingDir, "review.txt")))
+			},
+			expected: "structured run result review detail must be a regular file, not a symlink",
+		},
+		{
+			name: "review detail parent escapes working directory",
+			result: changedStepResultJSON(`{
+				"detail_mode": "inline",
+				"inline_detail_path": "details/review.txt"
+			}`),
+			setup: func(t *testing.T, workingDir string) {
+				t.Helper()
+				outsideDir := t.TempDir()
+				Ok(t, os.WriteFile(
+					filepath.Join(outsideDir, "review.txt"),
+					[]byte("review"),
+					0o600,
+				))
+				Ok(t, os.Symlink(outsideDir, filepath.Join(workingDir, "details")))
+			},
+			expected: "inspecting structured run result review detail",
+		},
+		{
+			name: "review detail exceeds bound",
+			result: changedStepResultJSON(`{
+				"detail_mode": "inline",
+				"inline_detail_path": "review.txt"
+			}`),
+			setup: func(t *testing.T, workingDir string) {
+				t.Helper()
+				Ok(t, os.WriteFile(
+					filepath.Join(workingDir, "review.txt"),
+					[]byte(strings.Repeat("x", runtime.MaxStepResultDetailBytes+1)),
+					0o600,
+				))
+			},
+			expected: "structured run result review detail exceeds maximum size",
+		},
+		{
+			name: "missing diagnostic detail",
+			result: `{
+				"schema_version": 1,
+				"outcome": "error",
+				"diagnostic": {
+					"code": "terraform_error",
+					"summary": "Terraform failed.",
+					"detail_path": "missing-diagnostic.txt"
+				}
+			}`,
+			execution: runtime.RunExecution{Err: commandError},
+			expected:  "inspecting structured run result diagnostic detail",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workingDir := t.TempDir()
+			if test.setup != nil {
+				test.setup(t, workingDir)
+			}
+			resultPath := filepath.Join(workingDir, "step-result.json")
+			Ok(t, os.WriteFile(resultPath, []byte(test.result), 0o600))
+
+			_, err := (runtime.StructuredRunResultCompleter{}).CompleteRun(
+				workingDir,
+				resultPath,
+				test.execution,
+			)
+
+			ErrContains(t, test.expected, err)
+		})
+	}
 }
 
 func TestStructuredRunResultCompleterRejectsInvalidReviewAndDiagnostic(t *testing.T) {

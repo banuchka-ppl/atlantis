@@ -24,6 +24,8 @@ const (
 	StepResultSchemaVersion = 1
 	// MaxStepResultBytes bounds structured custom-run result documents to one MiB.
 	MaxStepResultBytes = 1 << 20
+	// MaxStepResultDetailBytes bounds inline review and diagnostic sidecars.
+	MaxStepResultDetailBytes = 55_000
 	// StepResultFileEnvVar tells a custom run step where it may publish a structured result.
 	StepResultFileEnvVar = "ATLANTIS_STEP_RESULT_FILE"
 )
@@ -272,52 +274,20 @@ func (StructuredRunResultCompleter) CompleteRun(workingDir string, resultPath st
 		return CompletedRun{}, fmt.Errorf("structured run result path is outside the working directory")
 	}
 
-	resultInfo, err := os.Lstat(resultPath)
+	workingRoot, err := os.OpenRoot(workingDir)
 	if err != nil {
-		return CompletedRun{}, fmt.Errorf("inspecting structured run result: %w", err)
+		return CompletedRun{}, fmt.Errorf("opening structured run result working directory: %w", err)
 	}
-	if resultInfo.Mode()&os.ModeSymlink != 0 {
-		return CompletedRun{}, fmt.Errorf("structured run result must be a regular file, not a symlink")
-	}
-	if !resultInfo.Mode().IsRegular() {
-		return CompletedRun{}, fmt.Errorf("structured run result must be a regular file")
-	}
-	resolvedWorkingDir, err := filepath.EvalSymlinks(workingDir)
-	if err != nil {
-		return CompletedRun{}, fmt.Errorf("resolving structured run result working directory symlinks: %w", err)
-	}
-	resolvedResultPath, err := filepath.EvalSymlinks(resultPath)
-	if err != nil {
-		return CompletedRun{}, fmt.Errorf("resolving structured run result path symlinks: %w", err)
-	}
-	relativeResolvedPath, err := filepath.Rel(resolvedWorkingDir, resolvedResultPath)
-	if err != nil {
-		return CompletedRun{}, fmt.Errorf("checking resolved structured run result path: %w", err)
-	}
-	if relativeResolvedPath == ".." || strings.HasPrefix(relativeResolvedPath, ".."+string(filepath.Separator)) {
-		return CompletedRun{}, fmt.Errorf("structured run result path resolves outside the working directory")
-	}
-	if resultInfo.Size() > MaxStepResultBytes {
-		return CompletedRun{}, fmt.Errorf(
-			"structured run result exceeds maximum size of %d bytes",
-			MaxStepResultBytes,
-		)
-	}
+	defer workingRoot.Close()
 
-	resultFile, err := os.Open(resultPath)
+	resultBytes, err := readBoundedRegularResultFile(
+		workingRoot,
+		relativeResultPath,
+		"structured run result",
+		MaxStepResultBytes,
+	)
 	if err != nil {
-		return CompletedRun{}, fmt.Errorf("opening structured run result: %w", err)
-	}
-	defer resultFile.Close()
-	resultBytes, err := io.ReadAll(io.LimitReader(resultFile, MaxStepResultBytes+1))
-	if err != nil {
-		return CompletedRun{}, fmt.Errorf("reading structured run result: %w", err)
-	}
-	if len(resultBytes) > MaxStepResultBytes {
-		return CompletedRun{}, fmt.Errorf(
-			"structured run result exceeds maximum size of %d bytes",
-			MaxStepResultBytes,
-		)
+		return CompletedRun{}, err
 	}
 
 	var result StepResultV1
@@ -335,11 +305,84 @@ func (StructuredRunResultCompleter) CompleteRun(workingDir string, resultPath st
 	if err := validateStepResult(result, execution); err != nil {
 		return CompletedRun{}, err
 	}
+	if err := validateStepResultReferences(workingRoot, result); err != nil {
+		return CompletedRun{}, err
+	}
 
 	return CompletedRun{
 		Execution: execution,
 		Result:    result,
 	}, nil
+}
+
+func readBoundedRegularResultFile(
+	workingRoot *os.Root,
+	relativePath string,
+	description string,
+	maxBytes int64,
+) ([]byte, error) {
+	pathInfo, err := workingRoot.Lstat(relativePath)
+	if err != nil {
+		return nil, fmt.Errorf("inspecting %s: %w", description, err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s must be a regular file, not a symlink", description)
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s must be a regular file", description)
+	}
+
+	file, err := workingRoot.Open(relativePath)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", description, err)
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspecting opened %s: %w", description, err)
+	}
+	if !openedInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s must remain a regular file", description)
+	}
+	if !os.SameFile(pathInfo, openedInfo) {
+		return nil, fmt.Errorf("%s changed during validation", description)
+	}
+	if openedInfo.Size() > maxBytes {
+		return nil, fmt.Errorf("%s exceeds maximum size of %d bytes", description, maxBytes)
+	}
+
+	content, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", description, err)
+	}
+	if int64(len(content)) > maxBytes {
+		return nil, fmt.Errorf("%s exceeds maximum size of %d bytes", description, maxBytes)
+	}
+	return content, nil
+}
+
+func validateStepResultReferences(workingRoot *os.Root, result StepResultV1) error {
+	if result.Review != nil && result.Review.InlineDetailPath != "" {
+		if _, err := readBoundedRegularResultFile(
+			workingRoot,
+			result.Review.InlineDetailPath,
+			"structured run result review detail",
+			MaxStepResultDetailBytes,
+		); err != nil {
+			return err
+		}
+	}
+	if result.Diagnostic != nil && result.Diagnostic.DetailPath != "" {
+		if _, err := readBoundedRegularResultFile(
+			workingRoot,
+			result.Diagnostic.DetailPath,
+			"structured run result diagnostic detail",
+			MaxStepResultDetailBytes,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateStepResult(result StepResultV1, execution RunExecution) error {
