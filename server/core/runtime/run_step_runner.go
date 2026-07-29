@@ -31,6 +31,7 @@ type RunStepRunner struct {
 	StructuredRunResultsMode            StructuredRunResultMode
 	StructuredRunResultRepoPatterns     []string
 	StructuredRunResultWorkflowPatterns []string
+	StructuredRunResultObserver         StructuredRunResultObserver
 }
 
 func (r *RunStepRunner) Run(
@@ -242,21 +243,32 @@ func (r *RunStepRunner) completeStructuredRunResult(
 	resultPath string,
 	execution RunExecution,
 ) {
+	commandName := ctx.CommandName.String()
 	if _, err := os.Lstat(resultPath); err != nil {
 		if os.IsNotExist(err) {
+			r.StructuredRunResultObserver.recordArtifact(commandName, "missing")
 			ctx.Log.Debug("custom run step did not publish an optional structured result")
 			return
 		}
+		r.StructuredRunResultObserver.recordArtifact(commandName, "invalid")
 		ctx.Log.Warn("unable to inspect optional structured run result; legacy command result is unchanged: %s", err)
 		return
 	}
 
 	completed, err := (StructuredRunResultCompleter{}).CompleteRun(workingDir, resultPath, execution)
 	if err != nil {
+		r.StructuredRunResultObserver.recordArtifact(commandName, "invalid")
 		ctx.Log.Warn("invalid optional structured run result; legacy command result is unchanged: %s", err)
 		return
 	}
-	ctx.Log.Debug("validated optional structured run result with outcome %q", completed.Result.Outcome)
+	r.StructuredRunResultObserver.recordArtifact(commandName, "valid")
+	comparison := CompareStructuredRunResult(completed)
+	r.StructuredRunResultObserver.recordComparison(commandName, comparison)
+	ctx.Log.Debug(
+		"validated optional structured run result with outcome %q and shadow comparison %q",
+		completed.Result.Outcome,
+		comparison,
+	)
 }
 
 type runStepError struct {

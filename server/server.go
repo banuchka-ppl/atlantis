@@ -673,6 +673,9 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		StructuredRunResultsMode:            structuredRunResultsMode,
 		StructuredRunResultRepoPatterns:     structuredRunResultRepoPatterns,
 		StructuredRunResultWorkflowPatterns: structuredRunResultWorkflowPatterns,
+		StructuredRunResultObserver: runtime.StructuredRunResultObserver{
+			Scope: statsScope.SubScope("pplx.structured_run_result"),
+		},
 	}
 	drainer := &events.Drainer{}
 	statusController := &controllers.StatusController{

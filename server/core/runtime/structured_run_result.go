@@ -12,7 +12,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	eventmodels "github.com/runatlantis/atlantis/server/events/models"
+	tally "github.com/uber-go/tally/v4"
 )
 
 const (
@@ -140,6 +144,111 @@ type RunExecution struct {
 type CompletedRun struct {
 	Execution RunExecution
 	Result    StepResultV1
+}
+
+// StructuredRunResultComparison describes typed-versus-legacy shadow parity.
+type StructuredRunResultComparison string
+
+const (
+	StructuredRunResultComparisonMatch                  StructuredRunResultComparison = "match"
+	StructuredRunResultComparisonLegacyUnavailable      StructuredRunResultComparison = "legacy_unavailable"
+	StructuredRunResultComparisonOutcomeMismatch        StructuredRunResultComparison = "outcome_mismatch"
+	StructuredRunResultComparisonChangePresenceMismatch StructuredRunResultComparison = "change_presence_mismatch"
+	StructuredRunResultComparisonCountMismatch          StructuredRunResultComparison = "count_mismatch"
+	StructuredRunResultComparisonReviewDetailMismatch   StructuredRunResultComparison = "review_detail_mode_mismatch"
+)
+
+// StructuredRunResultObserver emits only aggregate, low-cardinality shadow metrics.
+type StructuredRunResultObserver struct {
+	Scope tally.Scope
+}
+
+func (o StructuredRunResultObserver) recordArtifact(command string, status string) {
+	if o.Scope == nil {
+		return
+	}
+	o.Scope.Tagged(map[string]string{
+		"command": command,
+		"status":  status,
+	}).Counter("artifact").Inc(1)
+}
+
+func (o StructuredRunResultObserver) recordComparison(
+	command string,
+	comparison StructuredRunResultComparison,
+) {
+	if o.Scope == nil {
+		return
+	}
+	o.Scope.Tagged(map[string]string{
+		"class":   string(comparison),
+		"command": command,
+	}).Counter("comparison").Inc(1)
+}
+
+// CompareStructuredRunResult compares a validated result with the existing
+// legacy output without changing either result.
+func CompareStructuredRunResult(completed CompletedRun) StructuredRunResultComparison {
+	typedSuccess := completed.Result.Outcome == StepResultOutcomeSuccess
+	legacySuccess := completed.Execution.Err == nil
+	if typedSuccess != legacySuccess {
+		return StructuredRunResultComparisonOutcomeMismatch
+	}
+	if !typedSuccess {
+		return StructuredRunResultComparisonMatch
+	}
+	if !eventmodels.HasPlanSummary(completed.Execution.ConsoleOutput) {
+		return StructuredRunResultComparisonLegacyUnavailable
+	}
+
+	typedChanges := completed.Result.Changes
+	legacyStats := eventmodels.NewPlanSuccessStats(completed.Execution.ConsoleOutput)
+	if typedChanges == nil || typedChanges.HasChanges != legacyStats.Changes {
+		return StructuredRunResultComparisonChangePresenceMismatch
+	}
+	if typedChanges.Import != legacyStats.Import ||
+		typedChanges.Add != legacyStats.Add ||
+		typedChanges.Change != legacyStats.Change ||
+		typedChanges.Destroy != legacyStats.Destroy ||
+		typedChanges.Forget != legacyStats.Forget {
+		return StructuredRunResultComparisonCountMismatch
+	}
+	if completed.Result.Review == nil ||
+		completed.Result.Review.DetailMode != legacyReviewDetailMode(completed.Execution.ConsoleOutput) {
+		return StructuredRunResultComparisonReviewDetailMismatch
+	}
+	return StructuredRunResultComparisonMatch
+}
+
+func legacyReviewDetailMode(output string) StepReviewDetailMode {
+	mode := ""
+	inlineBytes := 0
+	maxBytes := 0
+	inEnvelope := false
+	for _, line := range strings.Split(output, "\n") {
+		if line == "==ATLANTIS_PLAN_DIFF_V1==" {
+			inEnvelope = true
+			continue
+		}
+		if !inEnvelope {
+			continue
+		}
+		if value, ok := strings.CutPrefix(line, "mode:"); ok {
+			mode = value
+			continue
+		}
+		if value, ok := strings.CutPrefix(line, "inline_bytes:"); ok {
+			inlineBytes, _ = strconv.Atoi(value)
+			continue
+		}
+		if value, ok := strings.CutPrefix(line, "max_bytes:"); ok {
+			maxBytes, _ = strconv.Atoi(value)
+		}
+	}
+	if mode == "url" || (mode == "url_if_oversize" && inlineBytes > maxBytes) {
+		return StepReviewDetailModeURL
+	}
+	return StepReviewDetailModeInline
 }
 
 // StructuredRunResultCompleter validates and combines a command result file with process execution.

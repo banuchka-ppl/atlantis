@@ -1025,6 +1025,12 @@ func NewPlanSuccessStats(output string) PlanSuccessStats {
 	return s
 }
 
+// HasPlanSummary reports whether output contains a legacy changed or no-op plan
+// summary that can be compared with a structured result.
+func HasPlanSummary(output string) bool {
+	return rePlanChanges.MatchString(output) || reNoChanges.MatchString(output)
+}
+
 // parsePlanCount converts a numeric capture group from rePlanChanges into an
 // int. The "to import" group is optional in the regexp, so an empty string is
 // a normal case (no import block) and must produce 0 rather than be treated
