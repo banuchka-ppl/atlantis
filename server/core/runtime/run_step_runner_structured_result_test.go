@@ -6,6 +6,7 @@ package runtime_test
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/go-version"
@@ -20,6 +21,7 @@ import (
 	"github.com/runatlantis/atlantis/server/logging"
 	loggingmocks "github.com/runatlantis/atlantis/server/logging/mocks"
 	. "github.com/runatlantis/atlantis/testing"
+	tally "github.com/uber-go/tally/v4"
 )
 
 const pplxManagedWorkflow = "terraform-just-a1b2c3d4e5f6"
@@ -128,6 +130,103 @@ func TestRunStepRunner_ShadowDoesNotChangeLegacyError(t *testing.T) {
 	ErrContains(t, "exit status 7", err)
 	ErrContains(t, "legacy failure", err)
 	assertNoStructuredResultDirectories(t, workingDir)
+}
+
+func TestRunStepRunner_ShadowRecordsOnlyLowCardinalityComparisonMetrics(t *testing.T) {
+	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeShadow)
+	scope := tally.NewTestScope("structured", nil)
+	runner.StructuredRunResultObserver = runtime.StructuredRunResultObserver{Scope: scope}
+	ctx.ProjectName = "sensitive-project"
+	ctx.Pull.Num = 12345
+	ctx.BaseRepo.FullName = pplxManagedRepo
+	workingDir := t.TempDir()
+	command := fmt.Sprintf(
+		`printf '%%s' '%s' > "$%s"; printf 'Plan: 1 to add, 0 to change, 0 to destroy.\n'`,
+		`{"schema_version":1,"outcome":"success","changes":{"has_changes":true,"has_output_only_changes":false,"add":1,"change":0,"destroy":0,"import":0,"forget":0},"review":{"detail_mode":"inline","inline_detail_path":"review.txt"}}`,
+		runtime.StepResultFileEnvVar,
+	)
+
+	output, err := runner.Run(
+		ctx,
+		nil,
+		command,
+		workingDir,
+		nil,
+		false,
+		nil,
+		nil,
+	)
+
+	Ok(t, err)
+	Equals(t, "Plan: 1 to add, 0 to change, 0 to destroy.\n", output)
+	counters := scope.Snapshot().Counters()
+	Equals(t, 2, len(counters))
+	for name, counter := range counters {
+		Equals(t, int64(1), counter.Value())
+		if strings.Contains(name, "sensitive-project") ||
+			strings.Contains(name, pplxManagedRepo) ||
+			strings.Contains(name, "12345") {
+			t.Fatalf("metric contains a high-cardinality identity tag: %s", name)
+		}
+	}
+	assertCounterNameContains(t, counters, "artifact", "command=plan", "status=valid")
+	assertCounterNameContains(t, counters, "comparison", "class=match", "command=plan")
+	assertNoStructuredResultDirectories(t, workingDir)
+}
+
+func TestRunStepRunner_ShadowRecordsMissingAndInvalidArtifacts(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		status  string
+	}{
+		{
+			name:    "missing",
+			command: `printf 'legacy\n'`,
+			status:  "missing",
+		},
+		{
+			name: "invalid",
+			command: fmt.Sprintf(
+				`printf 'not-json' > "$%s"; printf 'legacy\n'`,
+				runtime.StepResultFileEnvVar,
+			),
+			status: "invalid",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeShadow)
+			scope := tally.NewTestScope("structured", nil)
+			runner.StructuredRunResultObserver = runtime.StructuredRunResultObserver{Scope: scope}
+			workingDir := t.TempDir()
+
+			output, err := runner.Run(
+				ctx,
+				nil,
+				test.command,
+				workingDir,
+				nil,
+				false,
+				nil,
+				nil,
+			)
+
+			Ok(t, err)
+			Equals(t, "legacy\n", output)
+			counters := scope.Snapshot().Counters()
+			Equals(t, 1, len(counters))
+			assertCounterNameContains(
+				t,
+				counters,
+				"artifact",
+				"command=plan",
+				"status="+test.status,
+			)
+			assertNoStructuredResultDirectories(t, workingDir)
+		})
+	}
 }
 
 func TestRunStepRunner_ShadowDoesNotExposePathOutsideScope(t *testing.T) {
@@ -267,4 +366,25 @@ func assertNoStructuredResultDirectories(t *testing.T, workingDir string) {
 	matches, err := filepath.Glob(filepath.Join(workingDir, ".atlantis-step-result-*"))
 	Ok(t, err)
 	Equals(t, []string(nil), matches)
+}
+
+func assertCounterNameContains(
+	t *testing.T,
+	counters map[string]tally.CounterSnapshot,
+	parts ...string,
+) {
+	t.Helper()
+	for name := range counters {
+		matches := true
+		for _, part := range parts {
+			if !strings.Contains(name, part) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return
+		}
+	}
+	t.Fatalf("no counter name contains %v: %v", parts, counters)
 }
