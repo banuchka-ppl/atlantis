@@ -104,7 +104,8 @@ func TestDefaultProjectCommandRunner_Plan(t *testing.T) {
 	When(mockInit.Run(ctx, nil, repoDir, expEnvs)).ThenReturn("init", nil)
 	When(mockPlan.Run(ctx, nil, repoDir, expEnvs)).ThenReturn("plan", nil)
 	When(mockApply.Run(ctx, nil, repoDir, expEnvs)).ThenReturn("apply", nil)
-	When(mockRun.Run(ctx, nil, "", repoDir, expEnvs, true, nil, nil)).ThenReturn("run", nil)
+	When(mockRun.RunWithResult(ctx, nil, "", repoDir, expEnvs, true, nil, nil)).
+		ThenReturn(runtime.RunStepOutput{ConsoleOutput: "run"}, nil)
 	res := runner.Plan(ctx)
 
 	Assert(t, res.PlanSuccess != nil, "exp plan success")
@@ -121,9 +122,69 @@ func TestDefaultProjectCommandRunner_Plan(t *testing.T) {
 		case "apply":
 			mockApply.VerifyWasCalledOnce().Run(ctx, nil, repoDir, expEnvs)
 		case "run":
-			mockRun.VerifyWasCalledOnce().Run(ctx, nil, "", repoDir, expEnvs, true, nil, nil)
+			mockRun.VerifyWasCalledOnce().RunWithResult(ctx, nil, "", repoDir, expEnvs, true, nil, nil)
 		}
 	}
+}
+
+func TestDefaultProjectCommandRunner_PlanUsesPreferredStructuredResult(t *testing.T) {
+	runResult := &runtime.CompletedRun{
+		Result: runtime.StepResultV1{
+			SchemaVersion: runtime.StepResultSchemaVersion,
+			Outcome:       runtime.StepResultOutcomeSuccess,
+			Summary:       "Terraform plan has changes.",
+			Changes: &runtime.StepChangeSummary{
+				HasChanges: true,
+				Add:        2,
+			},
+			Review: &runtime.StepReview{
+				DetailMode: runtime.StepReviewDetailModeInline,
+			},
+		},
+		ReviewDetail: "typed reviewer detail",
+	}
+
+	result := runPlanWithPreferredStructuredResult(t, runResult, nil)
+
+	Ok(t, result.Error)
+	Assert(t, result.PlanSuccess != nil, "expected a plan success")
+	Equals(t, "typed reviewer detail", result.PlanSuccess.TerraformOutput)
+	Assert(t, result.ProjectRunResult != nil, "expected the typed project run result")
+	Equals(t, models.ProjectRunOutcomeSuccess, result.ProjectRunResult.Outcome)
+	Equals(t, 2, result.ProjectRunResult.Changes.Add)
+	Equals(t, "typed reviewer detail", result.ProjectRunResult.Review.InlineDetail)
+}
+
+func TestDefaultProjectCommandRunner_PlanRetainsPreferredStructuredError(t *testing.T) {
+	runResult := &runtime.CompletedRun{
+		Result: runtime.StepResultV1{
+			SchemaVersion: runtime.StepResultSchemaVersion,
+			Outcome:       runtime.StepResultOutcomeError,
+			Summary:       "Terraform plan failed.",
+			Diagnostic: &runtime.StepDiagnostic{
+				Code:    models.ProjectRunDiagnosticCodeTerraformFailed,
+				Summary: "Terraform plan failed.",
+			},
+		},
+		DiagnosticDetail: "typed bounded diagnostic",
+	}
+
+	result := runPlanWithPreferredStructuredResult(
+		t,
+		runResult,
+		errors.New("legacy operational failure"),
+	)
+
+	Assert(t, result.Error != nil, "expected a plan error")
+	Assert(t, result.PlanSuccess == nil, "did not expect a plan success")
+	Assert(t, result.ProjectRunResult != nil, "expected the typed project run result")
+	Equals(t, models.ProjectRunOutcomeError, result.ProjectRunResult.Outcome)
+	Equals(
+		t,
+		models.ProjectRunDiagnosticCodeTerraformFailed,
+		result.ProjectRunResult.Diagnostic.Code,
+	)
+	Equals(t, "typed bounded diagnostic", result.ReviewerError())
 }
 
 func TestDefaultProjectCommandRunner_PlanPreservesBlockingPull(t *testing.T) {
@@ -181,12 +242,13 @@ func TestDefaultProjectCommandRunner_PlanSuppressesCustomRunStepStreaming(t *tes
 		RepoRelDir:        ".",
 		SuppressJobOutput: true,
 	}
-	When(mockRun.Run(ctx, nil, "", repoDir, map[string]string{}, false, nil, nil)).ThenReturn("run", nil)
+	When(mockRun.RunWithResult(ctx, nil, "", repoDir, map[string]string{}, false, nil, nil)).
+		ThenReturn(runtime.RunStepOutput{ConsoleOutput: "run"}, nil)
 
 	res := runner.Plan(ctx)
 
 	Assert(t, res.PlanSuccess != nil, "exp plan success")
-	mockRun.VerifyWasCalledOnce().Run(ctx, nil, "", repoDir, map[string]string{}, false, nil, nil)
+	mockRun.VerifyWasCalledOnce().RunWithResult(ctx, nil, "", repoDir, map[string]string{}, false, nil, nil)
 }
 
 func TestProjectOutputWrapper(t *testing.T) {
@@ -2706,7 +2768,7 @@ type mutatingCustomStepRunner struct {
 	mutate func() error
 }
 
-func (r *mutatingCustomStepRunner) Run(
+func (r *mutatingCustomStepRunner) RunWithResult(
 	command.ProjectContext,
 	*valid.CommandShell,
 	string,
@@ -2715,16 +2777,93 @@ func (r *mutatingCustomStepRunner) Run(
 	bool,
 	[]valid.PostProcessRunOutputOption,
 	[]*regexp.Regexp,
-) (string, error) {
+) (runtime.RunStepOutput, error) {
 	if r.calls != nil {
 		*r.calls = append(*r.calls, "run")
 	}
 	if r.mutate != nil {
 		if err := r.mutate(); err != nil {
-			return "", err
+			return runtime.RunStepOutput{}, err
 		}
 	}
-	return "run", nil
+	return runtime.RunStepOutput{ConsoleOutput: "run"}, nil
+}
+
+type preferredCustomStepRunner struct {
+	result runtime.RunStepOutput
+	err    error
+}
+
+func (r preferredCustomStepRunner) RunWithResult(
+	command.ProjectContext,
+	*valid.CommandShell,
+	string,
+	string,
+	map[string]string,
+	bool,
+	[]valid.PostProcessRunOutputOption,
+	[]*regexp.Regexp,
+) (runtime.RunStepOutput, error) {
+	return r.result, r.err
+}
+
+func runPlanWithPreferredStructuredResult(
+	t *testing.T,
+	runResult *runtime.CompletedRun,
+	runErr error,
+) command.ProjectCommandOutput {
+	t.Helper()
+	RegisterMockTestingT(t)
+	mockWorkingDir := mocks.NewMockWorkingDir()
+	mockLocker := mocks.NewMockProjectLocker()
+	mockCommandRequirementHandler := mocks.NewMockCommandRequirementHandler()
+	runner := events.DefaultProjectCommandRunner{
+		Locker:           mockLocker,
+		LockURLGenerator: mockURLGenerator{},
+		RunStepRunner: preferredCustomStepRunner{
+			result: runtime.RunStepOutput{
+				ConsoleOutput:    "legacy console output",
+				StructuredResult: runResult,
+			},
+			err: runErr,
+		},
+		WorkingDir:                mockWorkingDir,
+		WorkingDirLocker:          events.NewDefaultWorkingDirLocker(),
+		CommandRequirementHandler: mockCommandRequirementHandler,
+	}
+	repoDir := t.TempDir()
+	ctx := command.ProjectContext{
+		CommandName: command.Plan,
+		Log:         logging.NewNoopLogger(t),
+		RepoRelDir:  ".",
+		Steps:       []valid.Step{{StepName: "run"}},
+		Workspace:   "default",
+	}
+	When(mockWorkingDir.Clone(
+		Any[logging.SimpleLogging](),
+		Any[models.Repo](),
+		Any[models.PullRequest](),
+		Any[string](),
+	)).ThenReturn(repoDir, nil)
+	When(mockWorkingDir.GitReadLock(
+		Any[models.Repo](),
+		Any[models.PullRequest](),
+		Any[string](),
+	)).ThenReturn(func() {})
+	When(mockLocker.TryLock(
+		Any[logging.SimpleLogging](),
+		Any[models.PullRequest](),
+		Any[models.User](),
+		Any[string](),
+		Any[models.Project](),
+		AnyBool(),
+	)).ThenReturn(&events.TryLockResponse{
+		LockAcquired: true,
+		LockKey:      "lock-key",
+		UnlockFn:     func() error { return nil },
+	}, nil)
+
+	return runner.Plan(ctx)
 }
 
 func erroredPolicyProjectResult(ctx command.ProjectContext) command.ProjectResult {
@@ -3005,7 +3144,8 @@ func TestDefaultProjectCommandRunner_Apply(t *testing.T) {
 			When(mockInit.Run(ctx, nil, repoDir, expEnvs)).ThenReturn("init", nil)
 			When(mockPlan.Run(ctx, nil, repoDir, expEnvs)).ThenReturn("plan", nil)
 			When(mockApply.Run(ctx, nil, repoDir, expEnvs)).ThenReturn("apply", nil)
-			When(mockRun.Run(ctx, nil, "", repoDir, expEnvs, true, nil, nil)).ThenReturn("run", nil)
+			When(mockRun.RunWithResult(ctx, nil, "", repoDir, expEnvs, true, nil, nil)).
+				ThenReturn(runtime.RunStepOutput{ConsoleOutput: "run"}, nil)
 			When(mockEnv.Run(ctx, nil, "", "value", repoDir, make(map[string]string))).ThenReturn("value", nil)
 
 			res := runner.Apply(ctx)
@@ -3021,7 +3161,7 @@ func TestDefaultProjectCommandRunner_Apply(t *testing.T) {
 				case "apply":
 					mockApply.VerifyWasCalledOnce().Run(ctx, nil, repoDir, expEnvs)
 				case "run":
-					mockRun.VerifyWasCalledOnce().Run(ctx, nil, "", repoDir, expEnvs, true, nil, nil)
+					mockRun.VerifyWasCalledOnce().RunWithResult(ctx, nil, "", repoDir, expEnvs, true, nil, nil)
 				case "env":
 					mockEnv.VerifyWasCalledOnce().Run(ctx, nil, "", "value", repoDir, expEnvs)
 				}

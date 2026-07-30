@@ -517,7 +517,7 @@ var stringFlags = map[string]stringFlag{
 			"Supports partial overrides and can be combined with --language.",
 	},
 	PPLXStructuredRunResultsMode: {
-		description:  "Fork-only rollout mode for optional structured custom-run results. Supported values: off, shadow.",
+		description:  "Fork-only rollout mode for optional structured custom-run results. Supported values: off, shadow, prefer.",
 		defaultValue: DefaultPPLXStructuredRunResultsMode,
 		hidden:       true,
 	},

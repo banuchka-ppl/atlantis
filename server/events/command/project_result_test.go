@@ -112,6 +112,39 @@ func TestProjectResult_PlanStatus(t *testing.T) {
 		},
 		{
 			p: command.ProjectResult{
+				Command: command.Plan,
+				ProjectCommandOutput: command.ProjectCommandOutput{
+					PlanSuccess: &models.PlanSuccess{
+						TerraformOutput: "Plan: 1 to add, 0 to change, 0 to destroy.",
+					},
+					ProjectRunResult: &models.ProjectRunResult{
+						Outcome: models.ProjectRunOutcomeSuccess,
+						Changes: &models.ProjectRunChangeSummary{},
+					},
+				},
+			},
+			expStatus: models.PlannedNoChangesPlanStatus,
+		},
+		{
+			p: command.ProjectResult{
+				Command: command.Plan,
+				ProjectCommandOutput: command.ProjectCommandOutput{
+					PlanSuccess: &models.PlanSuccess{
+						TerraformOutput: "No changes. Your infrastructure matches the configuration.",
+					},
+					ProjectRunResult: &models.ProjectRunResult{
+						Outcome: models.ProjectRunOutcomeSuccess,
+						Changes: &models.ProjectRunChangeSummary{
+							HasChanges:           true,
+							HasOutputOnlyChanges: true,
+						},
+					},
+				},
+			},
+			expStatus: models.PlannedPlanStatus,
+		},
+		{
+			p: command.ProjectResult{
 				Command: command.Apply,
 				ProjectCommandOutput: command.ProjectCommandOutput{
 					Error: errors.New("err"),

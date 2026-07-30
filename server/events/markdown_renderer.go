@@ -113,6 +113,7 @@ type planSuccessData struct {
 	DisableRepoLocking       bool
 	EnableDiffMarkdownFormat bool
 	PlanStats                models.PlanSuccessStats
+	RunResult                *models.ProjectRunResult
 }
 
 type policyCheckResultsData struct {
@@ -132,6 +133,7 @@ type projectResultTmplData struct {
 	Rendered     string
 	NoChanges    bool
 	IsSuccessful bool
+	RunResult    *models.ProjectRunResult
 }
 
 // Initialize templates
@@ -252,6 +254,7 @@ func (m *MarkdownRenderer) renderProjectResults(ctx *command.Context, results []
 			RepoRelDir:   result.RepoRelDir,
 			ProjectName:  result.ProjectName,
 			IsSuccessful: result.IsSuccessful(),
+			RunResult:    result.ProjectRunResult,
 		}
 		if result.PlanSuccess != nil {
 			result.PlanSuccess.TerraformOutput = strings.TrimSpace(result.PlanSuccess.TerraformOutput)
@@ -261,16 +264,17 @@ func (m *MarkdownRenderer) renderProjectResults(ctx *command.Context, results []
 				DisableApply:             common.DisableApply,
 				DisableRepoLocking:       common.DisableRepoLocking,
 				EnableDiffMarkdownFormat: common.EnableDiffMarkdownFormat,
-				PlanStats:                result.PlanSuccess.Stats(),
+				PlanStats:                result.PlanStats(),
+				RunResult:                result.ProjectRunResult,
 			}
 			if m.shouldUseWrappedTmpl(vcsHost, result.PlanSuccess.TerraformOutput) {
-				data.PlanSummary = result.PlanSuccess.Summary()
+				data.PlanSummary = result.PlanSummary()
 				resultData.Rendered = m.renderTemplateTrimSpace(templates.Lookup("planSuccessWrapped"), data)
 			} else {
 				resultData.Rendered = m.renderTemplateTrimSpace(templates.Lookup("planSuccessUnwrapped"), data)
 			}
-			resultData.NoChanges = result.PlanSuccess.NoChanges()
-			if result.PlanSuccess.NoChanges() {
+			resultData.NoChanges = result.PlanNoChanges()
+			if result.PlanNoChanges() {
 				numPlansWithNoChanges++
 			} else {
 				numPlansWithChanges++
@@ -347,11 +351,12 @@ func (m *MarkdownRenderer) renderProjectResults(ctx *command.Context, results []
 		}
 		// Render error or failure templates. Done outside of previous block so that other context can be rendered for use here.
 		if result.Error != nil {
+			reviewerError := result.ReviewerError()
 			tmpl := templates.Lookup("unwrappedErr")
-			if m.shouldUseWrappedTmpl(vcsHost, result.Error.Error()) {
+			if m.shouldUseWrappedTmpl(vcsHost, reviewerError) {
 				tmpl = templates.Lookup("wrappedErr")
 			}
-			resultData.Rendered = m.renderTemplateTrimSpace(tmpl, errData{result.Error.Error(), resultData.Rendered, common})
+			resultData.Rendered = m.renderTemplateTrimSpace(tmpl, errData{reviewerError, resultData.Rendered, common})
 			if common.CommandName == applyCommandTitle {
 				numApplyErrors++
 			}

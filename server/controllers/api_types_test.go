@@ -26,6 +26,32 @@ func TestNewProjectResultAPI_IncludesForgetCount(t *testing.T) {
 	Equals(t, 2, result.Plan.ToForget)
 }
 
+func TestNewProjectResultAPI_UsesTypedPlanFacts(t *testing.T) {
+	result := controllers.NewProjectResultAPI(command.ProjectResult{
+		Command: command.Plan,
+		ProjectCommandOutput: command.ProjectCommandOutput{
+			PlanSuccess: &models.PlanSuccess{
+				TerraformOutput: "No changes. Your infrastructure matches the configuration.",
+			},
+			ProjectRunResult: &models.ProjectRunResult{
+				Outcome: models.ProjectRunOutcomeSuccess,
+				Summary: "Terraform plan has changes.",
+				Changes: &models.ProjectRunChangeSummary{
+					HasChanges: true,
+					Add:        2,
+					Destroy:    1,
+				},
+			},
+		},
+	})
+
+	Assert(t, result.Plan != nil, "expected plan details")
+	Equals(t, true, result.Plan.HasChanges)
+	Equals(t, 2, result.Plan.ToAdd)
+	Equals(t, 1, result.Plan.ToDestroy)
+	Equals(t, "Plan: 2 to add, 0 to change, 1 to destroy.", result.Plan.Summary)
+}
+
 func TestNewDriftProjectAPI_IncludesForgetCount(t *testing.T) {
 	result := controllers.NewDriftProjectAPI(models.ProjectDrift{
 		Drift: models.DriftSummary{

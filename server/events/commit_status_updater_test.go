@@ -349,6 +349,27 @@ func TestDefaultCommitStatusUpdater_UpdateProject(t *testing.T) {
 			expDescrip: "Plan: 1 to add, 2 to change, 3 to destroy.",
 		},
 		{
+			status: models.SuccessCommitStatus,
+			cmd:    command.Plan,
+			result: &command.ProjectCommandOutput{
+				PlanSuccess: &models.PlanSuccess{
+					TerraformOutput: "No changes. Your infrastructure matches the configuration.",
+				},
+				ProjectRunResult: &models.ProjectRunResult{
+					Outcome: models.ProjectRunOutcomeSuccess,
+					Changes: &models.ProjectRunChangeSummary{
+						HasChanges: true,
+						Import:     4,
+						Add:        2,
+						Change:     3,
+						Destroy:    1,
+						Forget:     5,
+					},
+				},
+			},
+			expDescrip: "Plan: 4 to import, 2 to add, 3 to change, 1 to destroy, 5 to forget.",
+		},
+		{
 			status:     models.PendingCommitStatus,
 			cmd:        command.Apply,
 			expDescrip: "Apply in progress...",

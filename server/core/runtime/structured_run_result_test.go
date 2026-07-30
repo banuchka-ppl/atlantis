@@ -52,9 +52,14 @@ func TestParseStructuredRunResultMode(t *testing.T) {
 			expected: runtime.StructuredRunResultModeShadow,
 		},
 		{
+			name:     "prefer",
+			value:    "prefer",
+			expected: runtime.StructuredRunResultModePrefer,
+		},
+		{
 			name:  "unimplemented mode",
-			value: "prefer",
-			err:   `invalid structured run result mode "prefer": must be one of [off shadow]`,
+			value: "required",
+			err:   `invalid structured run result mode "required": must be one of [off shadow prefer]`,
 		},
 	}
 
@@ -304,7 +309,7 @@ func TestStructuredRunResultCompleterRejectsInconsistentOutcome(t *testing.T) {
 				"schema_version": 1,
 				"outcome": "error",
 				"diagnostic": {
-					"code": "terraform_error",
+					"code": "terraform_failed",
 					"summary": "Terraform failed."
 				}
 			}`,
@@ -407,6 +412,23 @@ func TestStructuredRunResultCompleterRejectsInvalidResultSemantics(t *testing.T)
 			expected: "structured run result has_output_only_changes requires has_changes",
 		},
 		{
+			name: "output-only includes resource counts",
+			result: `{
+				"schema_version": 1,
+				"outcome": "success",
+				"changes": {
+					"has_changes": true,
+					"has_output_only_changes": true,
+					"add": 1,
+					"change": 0,
+					"destroy": 0,
+					"import": 0,
+					"forget": 0
+				}
+			}`,
+			expected: "structured run result output-only changes must not include resource counts",
+		},
+		{
 			name: "changes without counts or output-only changes",
 			result: `{
 				"schema_version": 1,
@@ -460,7 +482,7 @@ func TestStructuredRunResultCompleterCompletesChangedPlan(t *testing.T) {
 		"summary": "Plan: 2 to add, 1 to change, 0 to destroy.",
 		"changes": {
 			"has_changes": true,
-			"has_output_only_changes": true,
+			"has_output_only_changes": false,
 			"add": 2,
 			"change": 1,
 			"destroy": 0,
@@ -484,16 +506,16 @@ func TestStructuredRunResultCompleterCompletesChangedPlan(t *testing.T) {
 	Ok(t, err)
 
 	Equals(t, runtime.CompletedRun{
-		Execution: execution,
+		Execution:    execution,
+		ReviewDetail: "safe review metadata",
 		Result: runtime.StepResultV1{
 			SchemaVersion: 1,
 			Outcome:       runtime.StepResultOutcomeSuccess,
 			Summary:       "Plan: 2 to add, 1 to change, 0 to destroy.",
 			Changes: &runtime.StepChangeSummary{
-				HasChanges:           true,
-				HasOutputOnlyChanges: true,
-				Add:                  2,
-				Change:               1,
+				HasChanges: true,
+				Add:        2,
+				Change:     1,
 			},
 			Review: &runtime.StepReview{
 				DetailMode:       runtime.StepReviewDetailModeInline,
@@ -520,7 +542,7 @@ func TestStructuredRunResultCompleterCompletesErroredRun(t *testing.T) {
 		"outcome": "error",
 		"summary": "Terraform plan failed.",
 		"diagnostic": {
-			"code": "terraform_error",
+			"code": "terraform_failed",
 			"summary": "Invalid provider configuration.",
 			"detail_path": ".atlantis/plan-error.txt"
 		}
@@ -540,13 +562,14 @@ func TestStructuredRunResultCompleterCompletesErroredRun(t *testing.T) {
 	Ok(t, err)
 
 	Equals(t, runtime.CompletedRun{
-		Execution: execution,
+		DiagnosticDetail: "safe diagnostic metadata",
+		Execution:        execution,
 		Result: runtime.StepResultV1{
 			SchemaVersion: 1,
 			Outcome:       runtime.StepResultOutcomeError,
 			Summary:       "Terraform plan failed.",
 			Diagnostic: &runtime.StepDiagnostic{
-				Code:       "terraform_error",
+				Code:       "terraform_failed",
 				Summary:    "Invalid provider configuration.",
 				DetailPath: ".atlantis/plan-error.txt",
 			},
@@ -637,7 +660,7 @@ func TestStructuredRunResultCompleterRejectsInvalidReferencedFiles(t *testing.T)
 				"schema_version": 1,
 				"outcome": "error",
 				"diagnostic": {
-					"code": "terraform_error",
+					"code": "terraform_failed",
 					"summary": "Terraform failed.",
 					"detail_path": "missing-diagnostic.txt"
 				}
@@ -730,11 +753,24 @@ func TestStructuredRunResultCompleterRejectsInvalidReviewAndDiagnostic(t *testin
 				"schema_version": 1,
 				"outcome": "error",
 				"diagnostic": {
-					"code": "terraform_error"
+					"code": "terraform_failed"
 				}
 			}`,
 			execution: runtime.RunExecution{Err: commandError},
 			expected:  "structured run result diagnostic summary is required",
+		},
+		{
+			name: "unknown diagnostic code",
+			result: `{
+				"schema_version": 1,
+				"outcome": "error",
+				"diagnostic": {
+					"code": "terraform_error",
+					"summary": "Terraform plan failed."
+				}
+			}`,
+			execution: runtime.RunExecution{Err: commandError},
+			expected:  `invalid structured run result diagnostic code "terraform_error"`,
 		},
 		{
 			name: "diagnostic path escapes working directory",
@@ -742,7 +778,7 @@ func TestStructuredRunResultCompleterRejectsInvalidReviewAndDiagnostic(t *testin
 				"schema_version": 1,
 				"outcome": "error",
 				"diagnostic": {
-					"code": "terraform_error",
+					"code": "terraform_failed",
 					"summary": "Terraform failed.",
 					"detail_path": "../error.txt"
 				}

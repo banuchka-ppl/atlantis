@@ -79,6 +79,88 @@ func TestRunStepRunner_ShadowValidatesAndCleansResultWithoutChangingOutput(t *te
 	assertNoStructuredResultDirectories(t, workingDir)
 }
 
+func TestRunStepRunner_PreferReturnsValidatedResult(t *testing.T) {
+	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModePrefer)
+	workingDir := t.TempDir()
+	command := fmt.Sprintf(
+		`printf '%%s' '%s' > "$%s" && printf 'legacy\n'`,
+		`{"schema_version":1,"outcome":"success","summary":"Terraform plan has changes.","changes":{"has_changes":true,"has_output_only_changes":false,"add":1,"change":0,"destroy":0,"import":0,"forget":0}}`,
+		runtime.StepResultFileEnvVar,
+	)
+
+	result, err := runner.RunWithResult(
+		ctx,
+		nil,
+		command,
+		workingDir,
+		nil,
+		false,
+		nil,
+		nil,
+	)
+
+	Ok(t, err)
+	Equals(t, "legacy\n", result.ConsoleOutput)
+	Assert(t, result.StructuredResult != nil, "expected a validated structured result")
+	Equals(t, runtime.StepResultOutcomeSuccess, result.StructuredResult.Result.Outcome)
+	Equals(t, 1, result.StructuredResult.Result.Changes.Add)
+	assertNoStructuredResultDirectories(t, workingDir)
+}
+
+func TestRunStepRunner_PreferFallsBackForMissingOrInvalidResult(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		status  string
+	}{
+		{
+			name:    "missing",
+			command: `printf 'legacy\n'`,
+			status:  "missing",
+		},
+		{
+			name: "invalid",
+			command: fmt.Sprintf(
+				`printf 'not-json' > "$%s" && printf 'legacy\n'`,
+				runtime.StepResultFileEnvVar,
+			),
+			status: "invalid",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModePrefer)
+			scope := tally.NewTestScope("structured", nil)
+			runner.StructuredRunResultObserver = runtime.StructuredRunResultObserver{Scope: scope}
+			workingDir := t.TempDir()
+
+			result, err := runner.RunWithResult(
+				ctx,
+				nil,
+				test.command,
+				workingDir,
+				nil,
+				false,
+				nil,
+				nil,
+			)
+
+			Ok(t, err)
+			Equals(t, "legacy\n", result.ConsoleOutput)
+			Assert(t, result.StructuredResult == nil, "expected legacy fallback")
+			assertCounterNameContains(
+				t,
+				scope.Snapshot().Counters(),
+				"artifact",
+				"command=plan",
+				"status="+test.status,
+			)
+			assertNoStructuredResultDirectories(t, workingDir)
+		})
+	}
+}
+
 func TestRunStepRunner_ShadowInvalidResultDoesNotChangeLegacyReturn(t *testing.T) {
 	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeShadow)
 	logger := loggingmocks.NewMockSimpleLogging()

@@ -44,7 +44,34 @@ func (r *RunStepRunner) Run(
 	postProcessOutput []valid.PostProcessRunOutputOption,
 	postProcessFilterRegexes []*regexp.Regexp,
 ) (string, error) {
-	return r.run(
+	result, err := r.RunWithResult(
+		ctx,
+		shell,
+		command,
+		path,
+		envs,
+		streamOutput,
+		postProcessOutput,
+		postProcessFilterRegexes,
+	)
+	if err != nil {
+		return "", err
+	}
+	return result.ConsoleOutput, nil
+}
+
+// RunWithResult runs a custom command and returns a validated typed result in prefer mode.
+func (r *RunStepRunner) RunWithResult(
+	ctx command.ProjectContext,
+	shell *valid.CommandShell,
+	command string,
+	path string,
+	envs map[string]string,
+	streamOutput bool,
+	postProcessOutput []valid.PostProcessRunOutputOption,
+	postProcessFilterRegexes []*regexp.Regexp,
+) (RunStepOutput, error) {
+	return r.runWithResult(
 		ctx,
 		shell,
 		command,
@@ -68,6 +95,34 @@ func (r *RunStepRunner) run(
 	postProcessFilterRegexes []*regexp.Regexp,
 	structuredResultEligible bool,
 ) (string, error) {
+	result, err := r.runWithResult(
+		ctx,
+		shell,
+		command,
+		path,
+		envs,
+		streamOutput,
+		postProcessOutput,
+		postProcessFilterRegexes,
+		structuredResultEligible,
+	)
+	if err != nil {
+		return "", err
+	}
+	return result.ConsoleOutput, nil
+}
+
+func (r *RunStepRunner) runWithResult(
+	ctx command.ProjectContext,
+	shell *valid.CommandShell,
+	command string,
+	path string,
+	envs map[string]string,
+	streamOutput bool,
+	postProcessOutput []valid.PostProcessRunOutputOption,
+	postProcessFilterRegexes []*regexp.Regexp,
+	structuredResultEligible bool,
+) (RunStepOutput, error) {
 	tfDistribution := r.DefaultTFDistribution
 	tfVersion := r.DefaultTFVersion
 	if ctx.TerraformDistribution != nil {
@@ -81,7 +136,7 @@ func (r *RunStepRunner) run(
 	if err != nil {
 		err = fmt.Errorf("%s: Downloading terraform Version %s", err, tfVersion.String())
 		ctx.Log.Debug("error: %s", err)
-		return "", err
+		return RunStepOutput{}, err
 	}
 
 	structuredResult := r.prepareStructuredRunResult(ctx, path, structuredResultEligible)
@@ -148,13 +203,17 @@ func (r *RunStepRunner) run(
 		}
 	}
 
+	result := RunStepOutput{ConsoleOutput: output}
 	if structuredResult != nil {
-		r.completeStructuredRunResult(
+		completed := r.completeStructuredRunResult(
 			ctx,
 			path,
 			structuredResult.resultPath,
 			RunExecution{ConsoleOutput: output, Err: err},
 		)
+		if r.StructuredRunResultsMode == StructuredRunResultModePrefer {
+			result.StructuredResult = completed
+		}
 	}
 
 	if err != nil {
@@ -170,7 +229,7 @@ func (r *RunStepRunner) run(
 		} else {
 			ctx.Log.Debug("Treating custom policy tool error exit code as a policy failure.  Error output: %s", err)
 		}
-		return "", err
+		return result, err
 	}
 
 	for _, processOutput := range postProcessOutput {
@@ -181,7 +240,8 @@ func (r *RunStepRunner) run(
 		}
 	}
 
-	return output, nil
+	result.ConsoleOutput = output
+	return result, nil
 }
 
 type structuredRunResultSession struct {
@@ -197,7 +257,8 @@ func (r *RunStepRunner) prepareStructuredRunResult(
 	if !eligible {
 		return nil
 	}
-	if r.StructuredRunResultsMode != StructuredRunResultModeShadow {
+	if r.StructuredRunResultsMode != StructuredRunResultModeShadow &&
+		r.StructuredRunResultsMode != StructuredRunResultModePrefer {
 		return nil
 	}
 	if ctx.CommandName != command.Plan && ctx.CommandName != command.Apply {
@@ -242,24 +303,24 @@ func (r *RunStepRunner) completeStructuredRunResult(
 	workingDir string,
 	resultPath string,
 	execution RunExecution,
-) {
+) *CompletedRun {
 	commandName := ctx.CommandName.String()
 	if _, err := os.Lstat(resultPath); err != nil {
 		if os.IsNotExist(err) {
 			r.StructuredRunResultObserver.recordArtifact(commandName, "missing")
 			ctx.Log.Debug("custom run step did not publish an optional structured result")
-			return
+			return nil
 		}
 		r.StructuredRunResultObserver.recordArtifact(commandName, "invalid")
 		ctx.Log.Warn("unable to inspect optional structured run result; legacy command result is unchanged: %s", err)
-		return
+		return nil
 	}
 
 	completed, err := (StructuredRunResultCompleter{}).CompleteRun(workingDir, resultPath, execution)
 	if err != nil {
 		r.StructuredRunResultObserver.recordArtifact(commandName, "invalid")
 		ctx.Log.Warn("invalid optional structured run result; legacy command result is unchanged: %s", err)
-		return
+		return nil
 	}
 	r.StructuredRunResultObserver.recordArtifact(commandName, "valid")
 	comparison := CompareStructuredRunResult(completed)
@@ -269,6 +330,7 @@ func (r *RunStepRunner) completeStructuredRunResult(
 		completed.Result.Outcome,
 		comparison,
 	)
+	return &completed
 }
 
 type runStepError struct {

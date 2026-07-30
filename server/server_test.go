@@ -129,7 +129,7 @@ func TestNewServer_RejectsUnimplementedStructuredRunResultMode(t *testing.T) {
 
 	ErrEquals(
 		t,
-		`invalid structured run result mode "required": must be one of [off shadow]`,
+		`invalid structured run result mode "required": must be one of [off shadow prefer]`,
 		err,
 	)
 }
