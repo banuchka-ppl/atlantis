@@ -177,6 +177,175 @@ func TestRenderFailure(t *testing.T) {
 	}
 }
 
+func TestMarkdownRenderer_UsesTypedPlanFactsForAggregateCounts(t *testing.T) {
+	renderer := events.NewMarkdownRenderer(
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		"",
+		"atlantis",
+		false,
+		false,
+	)
+	ctx := &command.Context{
+		Log: logging.NewNoopLogger(t).WithHistory(),
+		Pull: models.PullRequest{
+			BaseRepo: models.Repo{
+				VCSHost: models.VCSHost{Type: models.Github},
+			},
+		},
+	}
+	result := command.Result{ProjectResults: []command.ProjectResult{
+		{
+			ProjectCommandOutput: command.ProjectCommandOutput{
+				PlanSuccess: &models.PlanSuccess{
+					TerraformOutput: "typed no-change review",
+				},
+				ProjectRunResult: &models.ProjectRunResult{
+					Outcome: models.ProjectRunOutcomeSuccess,
+					Changes: &models.ProjectRunChangeSummary{},
+				},
+			},
+			RepoRelDir: "infra/testing",
+			Workspace:  "default",
+		},
+		{
+			ProjectCommandOutput: command.ProjectCommandOutput{
+				PlanSuccess: &models.PlanSuccess{
+					TerraformOutput: "typed output-only review",
+				},
+				ProjectRunResult: &models.ProjectRunResult{
+					Outcome: models.ProjectRunOutcomeSuccess,
+					Changes: &models.ProjectRunChangeSummary{
+						HasChanges:           true,
+						HasOutputOnlyChanges: true,
+					},
+				},
+			},
+			RepoRelDir: "infra/prod",
+			Workspace:  "default",
+		},
+	}}
+
+	rendered := renderer.Render(
+		ctx,
+		result,
+		&events.CommentCommand{Name: command.Plan},
+	)
+
+	Assert(t, strings.Contains(rendered, "typed no-change review"), "expected typed no-change review")
+	Assert(t, strings.Contains(rendered, "typed output-only review"), "expected typed output-only review")
+	Assert(t, strings.Contains(rendered, "2 projects, 1 with changes, 1 with no changes, 0 failed"), "expected typed aggregate counts, got: %s", rendered)
+}
+
+func TestMarkdownRenderer_UsesTypedPlanDiagnostic(t *testing.T) {
+	renderer := events.NewMarkdownRenderer(
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		"",
+		"atlantis",
+		false,
+		false,
+	)
+	ctx := &command.Context{
+		Log: logging.NewNoopLogger(t).WithHistory(),
+		Pull: models.PullRequest{
+			BaseRepo: models.Repo{
+				VCSHost: models.VCSHost{Type: models.Github},
+			},
+		},
+	}
+	result := command.Result{ProjectResults: []command.ProjectResult{
+		{
+			Command: command.Plan,
+			ProjectCommandOutput: command.ProjectCommandOutput{
+				Error: errors.New("legacy operational failure detail"),
+				ProjectRunResult: &models.ProjectRunResult{
+					Outcome: models.ProjectRunOutcomeError,
+					Diagnostic: &models.ProjectRunDiagnostic{
+						Code:    "terraform_failed",
+						Summary: "Terraform plan failed.",
+						Detail:  "typed bounded diagnostic",
+					},
+				},
+			},
+			RepoRelDir: "infra/testing",
+			Workspace:  "default",
+		},
+	}}
+
+	rendered := renderer.Render(
+		ctx,
+		result,
+		&events.CommentCommand{Name: command.Plan},
+	)
+
+	Assert(t, strings.Contains(rendered, "typed bounded diagnostic"), "expected typed diagnostic, got: %s", rendered)
+	Assert(t, !strings.Contains(rendered, "legacy operational failure detail"), "legacy diagnostic leaked into reviewer output: %s", rendered)
+}
+
+func TestMarkdownRenderer_ExposesTypedPlanResultToTemplates(t *testing.T) {
+	templateDir := t.TempDir()
+	err := os.WriteFile(
+		filepath.Join(templateDir, "multi_project_plan.tmpl"),
+		[]byte(`{{ define "multiProjectPlan" }}{{ range .Results }}{{ .RunResult.Changes.Destroy }}|{{ .RunResult.Changes.HasOutputOnlyChanges }}|{{ .RunResult.Review.DetailsURL }}{{ end }}{{ end }}`),
+		0o600,
+	)
+	Ok(t, err)
+	renderer := events.NewMarkdownRenderer(
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		templateDir,
+		"atlantis",
+		false,
+		false,
+	)
+	ctx := &command.Context{
+		Log: logging.NewNoopLogger(t).WithHistory(),
+		Pull: models.PullRequest{
+			BaseRepo: models.Repo{
+				VCSHost: models.VCSHost{Type: models.Github},
+			},
+		},
+	}
+	projectOutput := command.ProjectCommandOutput{
+		PlanSuccess: &models.PlanSuccess{TerraformOutput: "typed review"},
+		ProjectRunResult: &models.ProjectRunResult{
+			Outcome: models.ProjectRunOutcomeSuccess,
+			Changes: &models.ProjectRunChangeSummary{
+				HasChanges: true,
+				Destroy:    2,
+			},
+			Review: &models.ProjectRunReview{
+				DetailMode: "url",
+				DetailsURL: "https://example.com/plan",
+			},
+		},
+	}
+
+	rendered := renderer.Render(
+		ctx,
+		command.Result{ProjectResults: []command.ProjectResult{
+			{ProjectCommandOutput: projectOutput},
+			{ProjectCommandOutput: projectOutput},
+		}},
+		&events.CommentCommand{Name: command.Plan},
+	)
+
+	Equals(t, "2|false|https://example.com/plan2|false|https://example.com/plan", rendered)
+}
+
 func TestRenderSpanishLocalization(t *testing.T) {
 	r := events.NewMarkdownRenderer(
 		false,      // gitlabSupportsCommonMark

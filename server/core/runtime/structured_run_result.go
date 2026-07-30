@@ -38,6 +38,8 @@ const (
 	StructuredRunResultModeOff StructuredRunResultMode = "off"
 	// StructuredRunResultModeShadow validates optional results without changing command behavior.
 	StructuredRunResultModeShadow StructuredRunResultMode = "shadow"
+	// StructuredRunResultModePrefer returns valid structured results to callers and falls back to legacy output.
+	StructuredRunResultModePrefer StructuredRunResultMode = "prefer"
 )
 
 // ParseStructuredRunResultMode validates a server-configured rollout mode.
@@ -45,11 +47,11 @@ func ParseStructuredRunResultMode(value string) (StructuredRunResultMode, error)
 	switch StructuredRunResultMode(value) {
 	case "", StructuredRunResultModeOff:
 		return StructuredRunResultModeOff, nil
-	case StructuredRunResultModeShadow:
-		return StructuredRunResultModeShadow, nil
+	case StructuredRunResultModeShadow, StructuredRunResultModePrefer:
+		return StructuredRunResultMode(value), nil
 	default:
 		return "", fmt.Errorf(
-			"invalid structured run result mode %q: must be one of [off shadow]",
+			"invalid structured run result mode %q: must be one of [off shadow prefer]",
 			value,
 		)
 	}
@@ -131,9 +133,9 @@ type StepResultV1 struct {
 
 // StepDiagnostic contains a stable error class and bounded reviewer-facing detail.
 type StepDiagnostic struct {
-	Code       string `json:"code"`
-	Summary    string `json:"summary"`
-	DetailPath string `json:"detail_path,omitempty"`
+	Code       eventmodels.ProjectRunDiagnosticCode `json:"code"`
+	Summary    string                               `json:"summary"`
+	DetailPath string                               `json:"detail_path,omitempty"`
 }
 
 // RunExecution preserves the console channel and process outcome separately from the typed result.
@@ -144,8 +146,16 @@ type RunExecution struct {
 
 // CompletedRun combines process execution with its validated structured result.
 type CompletedRun struct {
-	Execution RunExecution
-	Result    StepResultV1
+	DiagnosticDetail string
+	Execution        RunExecution
+	Result           StepResultV1
+	ReviewDetail     string
+}
+
+// RunStepOutput keeps legacy console output separate from an authoritative typed result.
+type RunStepOutput struct {
+	ConsoleOutput    string
+	StructuredResult *CompletedRun
 }
 
 // StructuredRunResultComparison describes typed-versus-legacy shadow parity.
@@ -305,13 +315,16 @@ func (StructuredRunResultCompleter) CompleteRun(workingDir string, resultPath st
 	if err := validateStepResult(result, execution); err != nil {
 		return CompletedRun{}, err
 	}
-	if err := validateStepResultReferences(workingRoot, result); err != nil {
+	reviewDetail, diagnosticDetail, err := readStepResultReferences(workingRoot, result)
+	if err != nil {
 		return CompletedRun{}, err
 	}
 
 	return CompletedRun{
-		Execution: execution,
-		Result:    result,
+		DiagnosticDetail: diagnosticDetail,
+		Execution:        execution,
+		Result:           result,
+		ReviewDetail:     reviewDetail,
 	}, nil
 }
 
@@ -361,28 +374,37 @@ func readBoundedRegularResultFile(
 	return content, nil
 }
 
-func validateStepResultReferences(workingRoot *os.Root, result StepResultV1) error {
+func readStepResultReferences(
+	workingRoot *os.Root,
+	result StepResultV1,
+) (string, string, error) {
+	var reviewDetail string
 	if result.Review != nil && result.Review.InlineDetailPath != "" {
-		if _, err := readBoundedRegularResultFile(
+		content, err := readBoundedRegularResultFile(
 			workingRoot,
 			result.Review.InlineDetailPath,
 			"structured run result review detail",
 			MaxStepResultDetailBytes,
-		); err != nil {
-			return err
+		)
+		if err != nil {
+			return "", "", err
 		}
+		reviewDetail = string(content)
 	}
+	var diagnosticDetail string
 	if result.Diagnostic != nil && result.Diagnostic.DetailPath != "" {
-		if _, err := readBoundedRegularResultFile(
+		content, err := readBoundedRegularResultFile(
 			workingRoot,
 			result.Diagnostic.DetailPath,
 			"structured run result diagnostic detail",
 			MaxStepResultDetailBytes,
-		); err != nil {
-			return err
+		)
+		if err != nil {
+			return "", "", err
 		}
+		diagnosticDetail = string(content)
 	}
-	return nil
+	return reviewDetail, diagnosticDetail, nil
 }
 
 func validateStepResult(result StepResultV1, execution RunExecution) error {
@@ -441,6 +463,9 @@ func validateStepChanges(changes StepChangeSummary) error {
 		changes.Destroy > 0 ||
 		changes.Import > 0 ||
 		changes.Forget > 0
+	if changes.HasOutputOnlyChanges && hasChangeCount {
+		return fmt.Errorf("structured run result output-only changes must not include resource counts")
+	}
 	if !changes.HasChanges && hasChangeCount {
 		return fmt.Errorf("structured run result has change counts but has_changes is false")
 	}
@@ -485,8 +510,14 @@ func validateStepDiagnostic(diagnostic *StepDiagnostic) error {
 	if diagnostic == nil {
 		return nil
 	}
-	if strings.TrimSpace(diagnostic.Code) == "" {
+	if strings.TrimSpace(string(diagnostic.Code)) == "" {
 		return fmt.Errorf("structured run result diagnostic code is required")
+	}
+	if !diagnostic.Code.IsValid() {
+		return fmt.Errorf(
+			"invalid structured run result diagnostic code %q",
+			diagnostic.Code,
+		)
 	}
 	if strings.TrimSpace(diagnostic.Summary) == "" {
 		return fmt.Errorf("structured run result diagnostic summary is required")

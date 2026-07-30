@@ -72,10 +72,19 @@ func TestNativeResultCommentMarkerRecordsProjectFailures(t *testing.T) {
 			ProjectName: "locked",
 		},
 		{
-			ProjectCommandOutput: command.ProjectCommandOutput{Error: errors.New("boom")},
-			RepoRelDir:           "infra/broken",
-			Workspace:            "default",
-			ProjectName:          "broken",
+			ProjectCommandOutput: command.ProjectCommandOutput{
+				Error: errors.New("boom"),
+				ProjectRunResult: &models.ProjectRunResult{
+					Outcome: models.ProjectRunOutcomeError,
+					Diagnostic: &models.ProjectRunDiagnostic{
+						Code:    "terraform_failed",
+						Summary: "Terraform plan failed.",
+					},
+				},
+			},
+			RepoRelDir:  "infra/broken",
+			Workspace:   "default",
+			ProjectName: "broken",
 		},
 		{
 			ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{}},
@@ -123,7 +132,7 @@ func TestNativeResultCommentMarkerRecordsProjectFailures(t *testing.T) {
 			Dir:         "infra/broken",
 			Workspace:   "default",
 			ProjectName: "broken",
-			Reason:      "error",
+			Reason:      "terraform_failed",
 		},
 	}, payload.Failures)
 }
@@ -134,17 +143,32 @@ func TestNativeResultCommentMarkerRecordsNoChangeProjectOutcomes(t *testing.T) {
 	ctx := &command.Context{Pull: pull}
 	result := command.Result{ProjectResults: []command.ProjectResult{
 		{
-			ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{
-				TerraformOutput: "No changes. Your infrastructure matches the configuration.",
-			}},
+			ProjectCommandOutput: command.ProjectCommandOutput{
+				PlanSuccess: &models.PlanSuccess{
+					TerraformOutput: "Plan: 1 to add, 0 to change, 0 to destroy.",
+				},
+				ProjectRunResult: &models.ProjectRunResult{
+					Outcome: models.ProjectRunOutcomeSuccess,
+					Changes: &models.ProjectRunChangeSummary{},
+				},
+			},
 			RepoRelDir:  "infra/testing",
 			Workspace:   "default",
 			ProjectName: "testing",
 		},
 		{
-			ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{
-				TerraformOutput: "Plan: 0 to add, 1 to change, 0 to destroy.",
-			}},
+			ProjectCommandOutput: command.ProjectCommandOutput{
+				PlanSuccess: &models.PlanSuccess{
+					TerraformOutput: "No changes. Your infrastructure matches the configuration.",
+				},
+				ProjectRunResult: &models.ProjectRunResult{
+					Outcome: models.ProjectRunOutcomeSuccess,
+					Changes: &models.ProjectRunChangeSummary{
+						HasChanges:           true,
+						HasOutputOnlyChanges: true,
+					},
+				},
+			},
 			RepoRelDir:  "infra/prod",
 			Workspace:   "default",
 			ProjectName: "prod",

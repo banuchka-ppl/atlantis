@@ -82,7 +82,7 @@ func NewProjectResultAPI(pr command.ProjectResult) ProjectResultAPI {
 
 	// Handle plan success
 	if pr.PlanSuccess != nil {
-		stats := pr.PlanSuccess.Stats()
+		stats := pr.PlanStats()
 		result.Output = pr.PlanSuccess.TerraformOutput
 		result.Plan = &PlanDetailsAPI{
 			HasChanges: stats.Changes,
@@ -91,7 +91,7 @@ func NewProjectResultAPI(pr command.ProjectResult) ProjectResultAPI {
 			ToDestroy:  stats.Destroy,
 			ToImport:   stats.Import,
 			ToForget:   stats.Forget,
-			Summary:    pr.PlanSuccess.DiffSummary(),
+			Summary:    pr.PlanDiffSummary(),
 		}
 	}
 

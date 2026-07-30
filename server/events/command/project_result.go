@@ -3,7 +3,11 @@
 
 package command
 
-import "github.com/runatlantis/atlantis/server/events/models"
+import (
+	"fmt"
+
+	"github.com/runatlantis/atlantis/server/events/models"
+)
 
 type ProjectFailureReason string
 
@@ -26,6 +30,7 @@ type ProjectCommandOutput struct {
 	Failure            string
 	FailureReason      ProjectFailureReason
 	BlockingPullNum    int
+	ProjectRunResult   *models.ProjectRunResult
 	PlanSuccess        *models.PlanSuccess
 	PolicyCheckResults *models.PolicyCheckResults
 	ApplySuccess       string
@@ -73,7 +78,7 @@ func (p ProjectResult) PlanStatus() models.ProjectPlanStatus {
 			return models.ErroredPlanStatus
 		} else if p.Failure != "" {
 			return models.ErroredPlanStatus
-		} else if p.PlanSuccess.NoChanges() {
+		} else if p.PlanNoChanges() {
 			return models.PlannedNoChangesPlanStatus
 		}
 		return models.PlannedPlanStatus
@@ -101,6 +106,105 @@ func (p ProjectResult) PlanStatus() models.ProjectPlanStatus {
 	}
 
 	panic("PlanStatus() missing a combination")
+}
+
+// PlanNoChanges reports the authoritative plan change classification.
+func (p ProjectCommandOutput) PlanNoChanges() bool {
+	if p.ProjectRunResult != nil && p.ProjectRunResult.Changes != nil {
+		return !p.ProjectRunResult.Changes.HasChanges
+	}
+	return p.PlanSuccess != nil && p.PlanSuccess.NoChanges()
+}
+
+// PlanStats returns typed plan counts when available and otherwise uses legacy output.
+func (p ProjectCommandOutput) PlanStats() models.PlanSuccessStats {
+	if p.ProjectRunResult != nil && p.ProjectRunResult.Changes != nil {
+		return models.PlanSuccessStats{
+			Import:  p.ProjectRunResult.Changes.Import,
+			Add:     p.ProjectRunResult.Changes.Add,
+			Change:  p.ProjectRunResult.Changes.Change,
+			Destroy: p.ProjectRunResult.Changes.Destroy,
+			Forget:  p.ProjectRunResult.Changes.Forget,
+			Changes: p.ProjectRunResult.Changes.HasChanges,
+		}
+	}
+	if p.PlanSuccess == nil {
+		return models.PlanSuccessStats{}
+	}
+	return p.PlanSuccess.Stats()
+}
+
+// PlanSummary returns typed reviewer summary when available and otherwise uses legacy output.
+func (p ProjectCommandOutput) PlanSummary() string {
+	if p.ProjectRunResult != nil {
+		return p.ProjectRunResult.Summary
+	}
+	if p.PlanSuccess == nil {
+		return ""
+	}
+	return p.PlanSuccess.Summary()
+}
+
+// PlanDiffSummary returns a status summary derived from authoritative plan facts.
+func (p ProjectCommandOutput) PlanDiffSummary() string {
+	if p.ProjectRunResult == nil || p.ProjectRunResult.Changes == nil {
+		if p.PlanSuccess == nil {
+			return ""
+		}
+		return p.PlanSuccess.DiffSummary()
+	}
+	changes := p.ProjectRunResult.Changes
+	if !changes.HasChanges || changes.HasOutputOnlyChanges {
+		return p.ProjectRunResult.Summary
+	}
+	switch {
+	case changes.Import > 0 && changes.Forget > 0:
+		return fmt.Sprintf(
+			"Plan: %d to import, %d to add, %d to change, %d to destroy, %d to forget.",
+			changes.Import,
+			changes.Add,
+			changes.Change,
+			changes.Destroy,
+			changes.Forget,
+		)
+	case changes.Import > 0:
+		return fmt.Sprintf(
+			"Plan: %d to import, %d to add, %d to change, %d to destroy.",
+			changes.Import,
+			changes.Add,
+			changes.Change,
+			changes.Destroy,
+		)
+	case changes.Forget > 0:
+		return fmt.Sprintf(
+			"Plan: %d to add, %d to change, %d to destroy, %d to forget.",
+			changes.Add,
+			changes.Change,
+			changes.Destroy,
+			changes.Forget,
+		)
+	default:
+		return fmt.Sprintf(
+			"Plan: %d to add, %d to change, %d to destroy.",
+			changes.Add,
+			changes.Change,
+			changes.Destroy,
+		)
+	}
+}
+
+// ReviewerError returns a bounded typed diagnostic when available.
+func (p ProjectCommandOutput) ReviewerError() string {
+	if p.ProjectRunResult != nil && p.ProjectRunResult.Diagnostic != nil {
+		if p.ProjectRunResult.Diagnostic.Detail != "" {
+			return p.ProjectRunResult.Diagnostic.Detail
+		}
+		return p.ProjectRunResult.Diagnostic.Summary
+	}
+	if p.Error == nil {
+		return ""
+	}
+	return p.Error.Error()
 }
 
 // IsSuccessful returns true if this project result had no errors.

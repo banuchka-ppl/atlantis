@@ -95,6 +95,10 @@ func encodeNativeResultCommentMarker(ctx *command.Context, cmd PullCommand, resu
 		if projectResult.Error != nil {
 			failure.Reason = "error"
 		}
+		if projectResult.ProjectRunResult != nil &&
+			projectResult.ProjectRunResult.Diagnostic != nil {
+			failure.Reason = string(projectResult.ProjectRunResult.Diagnostic.Code)
+		}
 		if projectResult.FailureReason != "" {
 			failure.Reason = string(projectResult.FailureReason)
 			failure.BlockingPullNum = projectResult.BlockingPullNum
@@ -131,7 +135,7 @@ func nativeResultCommentMarkerProjectOutcome(result command.ProjectResult) strin
 	if result.PlanSuccess == nil {
 		return "success"
 	}
-	if result.PlanSuccess.NoChanges() {
+	if result.PlanNoChanges() {
 		return "no_changes"
 	}
 	return "changes"

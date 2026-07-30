@@ -1299,7 +1299,8 @@ ATLANTIS_PPLX_STRUCTURED_RUN_RESULTS_MODE=shadow
 ```
 
 Fork-only hidden option that controls the structured-result migration for custom
-run steps. Supported values are `off` and `shadow`. Defaults to `off`.
+run steps. Supported values are `off`, `shadow`, and `prefer`. Defaults to
+`off`.
 
 In `shadow` mode, Atlantis gives eligible plan/apply custom run steps a unique
 `ATLANTIS_STEP_RESULT_FILE` path under the project working directory. Eligibility
@@ -1310,6 +1311,14 @@ publish a versioned JSON result at that path. Atlantis validates a published
 result and records validation failures in server logs, but continues to use the
 existing command output and process error as the authoritative result. Missing
 result files are expected while producers are migrating.
+
+In `prefer` mode, Atlantis keeps the same repository/workflow eligibility,
+validation, comparison telemetry, and cleanup behavior. A valid plan result
+becomes authoritative for reviewer output, change counts, no-op and output-only
+classification, commit statuses, and native-result metadata. Missing or invalid
+results fall back to the existing output and emit the structured-result failure
+signal. Apply rendering remains on the legacy path until its separate cutover.
+The stricter `required` mode is not implemented yet.
 
 Atlantis removes the per-step result directory after processing. Workflow
 environment configuration cannot override the path selected by Atlantis.
