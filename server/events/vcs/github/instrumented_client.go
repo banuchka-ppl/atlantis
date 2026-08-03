@@ -4,6 +4,8 @@
 package github
 
 import (
+	"fmt"
+
 	"github.com/google/go-github/v88/github"
 	"github.com/runatlantis/atlantis/server/events/models"
 	"github.com/runatlantis/atlantis/server/events/vcs"
@@ -14,11 +16,15 @@ import (
 )
 
 // NewInstrumentedGithubClient creates a client proxy responsible for gathering stats and logging
-func NewInstrumentedGithubClient(client *Client, statsScope tally.Scope, logger logging.SimpleLogging) IGithubClient {
+func NewInstrumentedGithubClient(client *Client, testingNativeResultCommentUpsertFailureTarget string, statsScope tally.Scope, logger logging.SimpleLogging) (IGithubClient, error) {
 	scope := statsScope.SubScope("github")
+	upsertClient, err := newTestingNativeResultCommentUpsertFailureClient(client, testingNativeResultCommentUpsertFailureTarget)
+	if err != nil {
+		return nil, fmt.Errorf("configuring testing native result comment upsert failure: %w", err)
+	}
 
 	instrumentedGHClient := &common.InstrumentedClient{
-		Client:     client,
+		Client:     upsertClient,
 		StatsScope: scope,
 		Logger:     logger,
 	}
@@ -28,7 +34,7 @@ func NewInstrumentedGithubClient(client *Client, statsScope tally.Scope, logger 
 		PullRequestGetter:  client,
 		StatsScope:         scope,
 		Logger:             logger,
-	}
+	}, nil
 }
 
 //go:generate go tool pegomock generate --package mocks -o mocks/mock_github_pull_request_getter.go GithubPullRequestGetter
