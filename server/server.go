@@ -286,7 +286,15 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 			return nil, err
 		}
 
-		githubClient = github.NewInstrumentedGithubClient(rawGithubClient, statsScope, logger)
+		githubClient, err = github.NewInstrumentedGithubClient(
+			rawGithubClient,
+			os.Getenv(github.PPLXTestingNativeResultCommentUpsertFailureTargetEnv),
+			statsScope,
+			logger,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if userConfig.GitlabUser != "" {
 		supportedVCSHosts = append(supportedVCSHosts, models.Gitlab)

@@ -30,7 +30,7 @@ const (
 	StepResultFileEnvVar = "ATLANTIS_STEP_RESULT_FILE"
 )
 
-// StructuredRunResultMode controls whether custom run steps can publish structured results.
+// StructuredRunResultMode controls how custom run steps publish structured results.
 type StructuredRunResultMode string
 
 const (
@@ -40,6 +40,8 @@ const (
 	StructuredRunResultModeShadow StructuredRunResultMode = "shadow"
 	// StructuredRunResultModePrefer returns valid structured results to callers and falls back to legacy output.
 	StructuredRunResultModePrefer StructuredRunResultMode = "prefer"
+	// StructuredRunResultModeRequired requires valid structured results from eligible plan steps.
+	StructuredRunResultModeRequired StructuredRunResultMode = "required"
 )
 
 // ParseStructuredRunResultMode validates a server-configured rollout mode.
@@ -47,11 +49,11 @@ func ParseStructuredRunResultMode(value string) (StructuredRunResultMode, error)
 	switch StructuredRunResultMode(value) {
 	case "", StructuredRunResultModeOff:
 		return StructuredRunResultModeOff, nil
-	case StructuredRunResultModeShadow, StructuredRunResultModePrefer:
+	case StructuredRunResultModeShadow, StructuredRunResultModePrefer, StructuredRunResultModeRequired:
 		return StructuredRunResultMode(value), nil
 	default:
 		return "", fmt.Errorf(
-			"invalid structured run result mode %q: must be one of [off shadow prefer]",
+			"invalid structured run result mode %q: must be one of [off shadow prefer required]",
 			value,
 		)
 	}

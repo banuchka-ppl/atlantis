@@ -640,14 +640,14 @@ func TestExecute_ValidateAutomergeMethod(t *testing.T) {
 
 func TestExecute_ValidatePPLXStructuredRunResultsMode(t *testing.T) {
 	c := setupWithDefaults(map[string]any{
-		PPLXStructuredRunResultsMode: "required",
+		PPLXStructuredRunResultsMode: "unknown",
 	}, t)
 
 	err := c.Execute()
 
 	ErrEquals(
 		t,
-		`invalid --pplx-structured-run-results-mode: invalid structured run result mode "required": must be one of [off shadow prefer]`,
+		`invalid --pplx-structured-run-results-mode: invalid structured run result mode "unknown": must be one of [off shadow prefer required]`,
 		err,
 	)
 }
