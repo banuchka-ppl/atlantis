@@ -57,9 +57,14 @@ func TestParseStructuredRunResultMode(t *testing.T) {
 			expected: runtime.StructuredRunResultModePrefer,
 		},
 		{
-			name:  "unimplemented mode",
-			value: "required",
-			err:   `invalid structured run result mode "required": must be one of [off shadow prefer]`,
+			name:     "required",
+			value:    "required",
+			expected: runtime.StructuredRunResultModeRequired,
+		},
+		{
+			name:  "unknown mode",
+			value: "unknown",
+			err:   `invalid structured run result mode "unknown": must be one of [off shadow prefer required]`,
 		},
 	}
 

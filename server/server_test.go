@@ -121,15 +121,15 @@ func TestNewServer_EnableDriftRemediationRequiresDriftDetection(t *testing.T) {
 	ErrContains(t, "--enable-drift-remediation requires --enable-drift-detection", err)
 }
 
-func TestNewServer_RejectsUnimplementedStructuredRunResultMode(t *testing.T) {
+func TestNewServer_RejectsUnknownStructuredRunResultMode(t *testing.T) {
 	_, err := server.NewServer(
-		server.UserConfig{PPLXStructuredRunResultsMode: "required"},
+		server.UserConfig{PPLXStructuredRunResultsMode: "unknown"},
 		server.Config{},
 	)
 
 	ErrEquals(
 		t,
-		`invalid structured run result mode "required": must be one of [off shadow prefer]`,
+		`invalid structured run result mode "unknown": must be one of [off shadow prefer required]`,
 		err,
 	)
 }

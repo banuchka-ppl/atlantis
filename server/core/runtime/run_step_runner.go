@@ -4,6 +4,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -60,7 +61,7 @@ func (r *RunStepRunner) Run(
 	return result.ConsoleOutput, nil
 }
 
-// RunWithResult runs a custom command and returns a validated typed result in prefer mode.
+// RunWithResult runs a custom command and may return an authoritative typed result.
 func (r *RunStepRunner) RunWithResult(
 	ctx command.ProjectContext,
 	shell *valid.CommandShell,
@@ -139,7 +140,10 @@ func (r *RunStepRunner) runWithResult(
 		return RunStepOutput{}, err
 	}
 
-	structuredResult := r.prepareStructuredRunResult(ctx, path, structuredResultEligible)
+	structuredResult, err := r.prepareStructuredRunResult(ctx, path, structuredResultEligible)
+	if err != nil {
+		return RunStepOutput{}, err
+	}
 	if structuredResult != nil {
 		defer structuredResult.cleanup(ctx)
 	}
@@ -205,14 +209,18 @@ func (r *RunStepRunner) runWithResult(
 
 	result := RunStepOutput{ConsoleOutput: output}
 	if structuredResult != nil {
-		completed := r.completeStructuredRunResult(
+		completed, structuredResultErr := r.completeStructuredRunResult(
 			ctx,
 			path,
 			structuredResult.resultPath,
 			RunExecution{ConsoleOutput: output, Err: err},
 		)
-		if r.StructuredRunResultsMode == StructuredRunResultModePrefer {
+		if r.StructuredRunResultsMode == StructuredRunResultModePrefer ||
+			r.StructuredRunResultsMode == StructuredRunResultModeRequired {
 			result.StructuredResult = completed
+		}
+		if structuredResultErr != nil {
+			err = errors.Join(err, structuredResultErr)
 		}
 	}
 
@@ -253,33 +261,42 @@ func (r *RunStepRunner) prepareStructuredRunResult(
 	ctx command.ProjectContext,
 	workingDir string,
 	eligible bool,
-) *structuredRunResultSession {
+) (*structuredRunResultSession, error) {
 	if !eligible {
-		return nil
+		return nil, nil
 	}
-	if r.StructuredRunResultsMode != StructuredRunResultModeShadow &&
-		r.StructuredRunResultsMode != StructuredRunResultModePrefer {
-		return nil
-	}
-	if ctx.CommandName != command.Plan && ctx.CommandName != command.Apply {
-		return nil
+	switch r.StructuredRunResultsMode {
+	case StructuredRunResultModeRequired:
+		if ctx.CommandName != command.Plan {
+			return nil, nil
+		}
+	case StructuredRunResultModeShadow, StructuredRunResultModePrefer:
+		if ctx.CommandName != command.Plan && ctx.CommandName != command.Apply {
+			return nil, nil
+		}
+	default:
+		return nil, nil
 	}
 	if !matchesAnyPattern(ctx.BaseRepo.FullName, r.StructuredRunResultRepoPatterns) {
-		return nil
+		return nil, nil
 	}
 	if !matchesAnyPattern(ctx.WorkflowName, r.StructuredRunResultWorkflowPatterns) {
-		return nil
+		return nil, nil
 	}
 
 	resultDir, err := os.MkdirTemp(workingDir, ".atlantis-step-result-")
 	if err != nil {
+		if r.StructuredRunResultsMode == StructuredRunResultModeRequired {
+			r.StructuredRunResultObserver.recordArtifact(ctx.CommandName.String(), "unavailable")
+			return nil, fmt.Errorf("allocating required structured run result path: %w", err)
+		}
 		ctx.Log.Warn("unable to allocate structured run result path; continuing without shadow validation: %s", err)
-		return nil
+		return nil, nil
 	}
 	return &structuredRunResultSession{
 		directory:  resultDir,
 		resultPath: filepath.Join(resultDir, "result.json"),
-	}
+	}, nil
 }
 
 func matchesAnyPattern(value string, patterns []string) bool {
@@ -303,34 +320,43 @@ func (r *RunStepRunner) completeStructuredRunResult(
 	workingDir string,
 	resultPath string,
 	execution RunExecution,
-) *CompletedRun {
+) (*CompletedRun, error) {
 	commandName := ctx.CommandName.String()
 	if _, err := os.Lstat(resultPath); err != nil {
 		if os.IsNotExist(err) {
 			r.StructuredRunResultObserver.recordArtifact(commandName, "missing")
+			if r.StructuredRunResultsMode == StructuredRunResultModeRequired {
+				return nil, errors.New("required structured run result is missing")
+			}
 			ctx.Log.Debug("custom run step did not publish an optional structured result")
-			return nil
+			return nil, nil
 		}
 		r.StructuredRunResultObserver.recordArtifact(commandName, "invalid")
+		if r.StructuredRunResultsMode == StructuredRunResultModeRequired {
+			return nil, fmt.Errorf("invalid required structured run result: inspecting artifact: %w", err)
+		}
 		ctx.Log.Warn("unable to inspect optional structured run result; legacy command result is unchanged: %s", err)
-		return nil
+		return nil, nil
 	}
 
 	completed, err := (StructuredRunResultCompleter{}).CompleteRun(workingDir, resultPath, execution)
 	if err != nil {
 		r.StructuredRunResultObserver.recordArtifact(commandName, "invalid")
+		if r.StructuredRunResultsMode == StructuredRunResultModeRequired {
+			return nil, fmt.Errorf("invalid required structured run result: %w", err)
+		}
 		ctx.Log.Warn("invalid optional structured run result; legacy command result is unchanged: %s", err)
-		return nil
+		return nil, nil
 	}
 	r.StructuredRunResultObserver.recordArtifact(commandName, "valid")
 	comparison := CompareStructuredRunResult(completed)
 	r.StructuredRunResultObserver.recordComparison(commandName, comparison)
 	ctx.Log.Debug(
-		"validated optional structured run result with outcome %q and shadow comparison %q",
+		"validated structured run result with outcome %q and shadow comparison %q",
 		completed.Result.Outcome,
 		comparison,
 	)
-	return &completed
+	return &completed, nil
 }
 
 type runStepError struct {

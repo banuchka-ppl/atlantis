@@ -5,6 +5,7 @@ package runtime_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -79,32 +80,41 @@ func TestRunStepRunner_ShadowValidatesAndCleansResultWithoutChangingOutput(t *te
 	assertNoStructuredResultDirectories(t, workingDir)
 }
 
-func TestRunStepRunner_PreferReturnsValidatedResult(t *testing.T) {
-	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModePrefer)
-	workingDir := t.TempDir()
-	command := fmt.Sprintf(
-		`printf '%%s' '%s' > "$%s" && printf 'legacy\n'`,
-		`{"schema_version":1,"outcome":"success","summary":"Terraform plan has changes.","changes":{"has_changes":true,"has_output_only_changes":false,"add":1,"change":0,"destroy":0,"import":0,"forget":0}}`,
-		runtime.StepResultFileEnvVar,
-	)
+func TestRunStepRunner_AuthoritativeModesReturnValidatedResult(t *testing.T) {
+	modes := []runtime.StructuredRunResultMode{
+		runtime.StructuredRunResultModePrefer,
+		runtime.StructuredRunResultModeRequired,
+	}
 
-	result, err := runner.RunWithResult(
-		ctx,
-		nil,
-		command,
-		workingDir,
-		nil,
-		false,
-		nil,
-		nil,
-	)
+	for _, mode := range modes {
+		t.Run(string(mode), func(t *testing.T) {
+			runner, ctx := newStructuredResultRunStepRunner(t, mode)
+			workingDir := t.TempDir()
+			command := fmt.Sprintf(
+				`printf '%%s' '%s' > "$%s" && printf 'legacy\n'`,
+				`{"schema_version":1,"outcome":"success","summary":"Terraform plan has changes.","changes":{"has_changes":true,"has_output_only_changes":false,"add":1,"change":0,"destroy":0,"import":0,"forget":0}}`,
+				runtime.StepResultFileEnvVar,
+			)
 
-	Ok(t, err)
-	Equals(t, "legacy\n", result.ConsoleOutput)
-	Assert(t, result.StructuredResult != nil, "expected a validated structured result")
-	Equals(t, runtime.StepResultOutcomeSuccess, result.StructuredResult.Result.Outcome)
-	Equals(t, 1, result.StructuredResult.Result.Changes.Add)
-	assertNoStructuredResultDirectories(t, workingDir)
+			result, err := runner.RunWithResult(
+				ctx,
+				nil,
+				command,
+				workingDir,
+				nil,
+				false,
+				nil,
+				nil,
+			)
+
+			Ok(t, err)
+			Equals(t, "legacy\n", result.ConsoleOutput)
+			Assert(t, result.StructuredResult != nil, "expected a validated structured result")
+			Equals(t, runtime.StepResultOutcomeSuccess, result.StructuredResult.Result.Outcome)
+			Equals(t, 1, result.StructuredResult.Result.Changes.Add)
+			assertNoStructuredResultDirectories(t, workingDir)
+		})
+	}
 }
 
 func TestRunStepRunner_PreferFallsBackForMissingOrInvalidResult(t *testing.T) {
@@ -159,6 +169,90 @@ func TestRunStepRunner_PreferFallsBackForMissingOrInvalidResult(t *testing.T) {
 			assertNoStructuredResultDirectories(t, workingDir)
 		})
 	}
+}
+
+func TestRunStepRunner_RequiredRejectsMissingOrInvalidResult(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		status  string
+		err     string
+	}{
+		{
+			name:    "missing",
+			command: `printf 'legacy\n'`,
+			status:  "missing",
+			err:     "required structured run result is missing",
+		},
+		{
+			name: "invalid",
+			command: fmt.Sprintf(
+				`printf 'not-json' > "$%s" && printf 'legacy\n'`,
+				runtime.StepResultFileEnvVar,
+			),
+			status: "invalid",
+			err:    "invalid required structured run result: decoding structured run result",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
+			scope := tally.NewTestScope("structured", nil)
+			runner.StructuredRunResultObserver = runtime.StructuredRunResultObserver{Scope: scope}
+			workingDir := t.TempDir()
+
+			result, err := runner.RunWithResult(
+				ctx,
+				nil,
+				test.command,
+				workingDir,
+				nil,
+				false,
+				nil,
+				nil,
+			)
+
+			ErrContains(t, test.err, err)
+			Equals(t, "legacy\n", result.ConsoleOutput)
+			Assert(t, result.StructuredResult == nil, "did not expect a structured result")
+			assertCounterNameContains(
+				t,
+				scope.Snapshot().Counters(),
+				"artifact",
+				"command=plan",
+				"status="+test.status,
+			)
+			assertNoStructuredResultDirectories(t, workingDir)
+		})
+	}
+}
+
+func TestRunStepRunner_RequiredReturnsValidatedErrorResult(t *testing.T) {
+	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
+	workingDir := t.TempDir()
+	command := fmt.Sprintf(
+		`printf '%%s' '%s' > "$%s"; printf 'legacy failure\n'; exit 7`,
+		`{"schema_version":1,"outcome":"error","diagnostic":{"code":"tool_failed","summary":"tool failed"}}`,
+		runtime.StepResultFileEnvVar,
+	)
+
+	result, err := runner.RunWithResult(
+		ctx,
+		nil,
+		command,
+		workingDir,
+		nil,
+		false,
+		nil,
+		nil,
+	)
+
+	ErrContains(t, "exit status 7", err)
+	Assert(t, result.StructuredResult != nil, "expected a validated structured error result")
+	Equals(t, runtime.StepResultOutcomeError, result.StructuredResult.Result.Outcome)
+	Equals(t, "tool failed", result.StructuredResult.Result.Diagnostic.Summary)
+	assertNoStructuredResultDirectories(t, workingDir)
 }
 
 func TestRunStepRunner_ShadowInvalidResultDoesNotChangeLegacyReturn(t *testing.T) {
@@ -370,6 +464,98 @@ func TestRunStepRunner_ShadowDoesNotExposePathOutsideScope(t *testing.T) {
 			assertNoStructuredResultDirectories(t, workingDir)
 		})
 	}
+}
+
+func TestRunStepRunner_RequiredDoesNotChangeApplyOrOutOfScopeRuns(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*runtime.RunStepRunner, *command.ProjectContext)
+	}{
+		{
+			name: "apply",
+			configure: func(_ *runtime.RunStepRunner, ctx *command.ProjectContext) {
+				ctx.CommandName = command.Apply
+			},
+		},
+		{
+			name: "policy check",
+			configure: func(_ *runtime.RunStepRunner, ctx *command.ProjectContext) {
+				ctx.CommandName = command.PolicyCheck
+			},
+		},
+		{
+			name: "repository is not allowlisted",
+			configure: func(_ *runtime.RunStepRunner, ctx *command.ProjectContext) {
+				ctx.BaseRepo.FullName = "another-org/repo"
+			},
+		},
+		{
+			name: "workflow is not allowlisted",
+			configure: func(_ *runtime.RunStepRunner, ctx *command.ProjectContext) {
+				ctx.WorkflowName = "repo-defined-workflow"
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
+			test.configure(&runner, &ctx)
+			workingDir := t.TempDir()
+
+			output, err := runner.Run(
+				ctx,
+				nil,
+				`if [ -z "${ATLANTIS_STEP_RESULT_FILE+x}" ]; then printf 'legacy\n'; else printf 'exposed\n'; fi`,
+				workingDir,
+				nil,
+				false,
+				nil,
+				nil,
+			)
+
+			Ok(t, err)
+			Equals(t, "legacy\n", output)
+			assertNoStructuredResultDirectories(t, workingDir)
+		})
+	}
+}
+
+func TestRunStepRunner_RequiredFailsBeforeCommandWhenResultPathCannotBeAllocated(t *testing.T) {
+	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
+	scope := tally.NewTestScope("structured", nil)
+	runner.StructuredRunResultObserver = runtime.StructuredRunResultObserver{Scope: scope}
+	rootDir := t.TempDir()
+	workingDir := filepath.Join(rootDir, "working")
+	Ok(t, os.Mkdir(workingDir, 0o700))
+	Ok(t, os.Chmod(workingDir, 0o500))
+	t.Cleanup(func() {
+		Ok(t, os.Chmod(workingDir, 0o700))
+	})
+	commandMarker := filepath.Join(rootDir, "command-executed")
+
+	_, err := runner.RunWithResult(
+		ctx,
+		nil,
+		fmt.Sprintf("touch %q", commandMarker),
+		workingDir,
+		nil,
+		false,
+		nil,
+		nil,
+	)
+
+	ErrContains(t, "allocating required structured run result path", err)
+	_, markerErr := os.Stat(commandMarker)
+	Assert(t, os.IsNotExist(markerErr), "custom command executed after result-path allocation failed")
+	assertCounterNameContains(
+		t,
+		scope.Snapshot().Counters(),
+		"artifact",
+		"command=plan",
+		"status=unavailable",
+	)
+	assertNoStructuredResultDirectories(t, workingDir)
 }
 
 func TestEnvStepRunner_ShadowDoesNotExposeStructuredResultPath(t *testing.T) {
