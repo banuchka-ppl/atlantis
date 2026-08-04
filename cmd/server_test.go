@@ -124,6 +124,7 @@ var testFlags = map[string]any{
 	PendingApplyStatusFlag:           false,
 	PPLXNativeResultCommentMarkers:   false,
 	PPLXNativeResultCommentUpsert:    false,
+	PPLXStructuredApplyResultsMode:   "prefer",
 	PPLXStructuredResultRepos:        "ppl-ai/agi",
 	PPLXStructuredResultWorkflows:    "terraform-just-*,terraform-delete-module",
 	PPLXStructuredRunResultsMode:     "shadow",
@@ -648,6 +649,20 @@ func TestExecute_ValidatePPLXStructuredRunResultsMode(t *testing.T) {
 	ErrEquals(
 		t,
 		`invalid --pplx-structured-run-results-mode: invalid structured run result mode "unknown": must be one of [off shadow prefer required]`,
+		err,
+	)
+}
+
+func TestExecute_ValidatePPLXStructuredApplyResultsMode(t *testing.T) {
+	c := setupWithDefaults(map[string]any{
+		PPLXStructuredApplyResultsMode: "unknown",
+	}, t)
+
+	err := c.Execute()
+
+	ErrEquals(
+		t,
+		`invalid --pplx-structured-apply-results-mode: invalid structured run result mode "unknown": must be one of [off shadow prefer required]`,
 		err,
 	)
 }

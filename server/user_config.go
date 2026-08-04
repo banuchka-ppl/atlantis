@@ -101,6 +101,7 @@ type UserConfig struct {
 	PPLXNativeResultCommentMarkers  bool   `mapstructure:"pplx-native-result-comment-markers"`
 	PPLXNativeResultCommentUpsert   bool   `mapstructure:"pplx-native-result-comment-upsert"`
 	PPLXStructuredRunResultsMode    string `mapstructure:"pplx-structured-run-results-mode"`
+	PPLXStructuredApplyResultsMode  string `mapstructure:"pplx-structured-apply-results-mode"`
 	PPLXStructuredResultRepos       string `mapstructure:"pplx-structured-run-results-repo-allowlist"`
 	PPLXStructuredResultWorkflows   string `mapstructure:"pplx-structured-run-results-workflow-allowlist"`
 	StatsNamespace                  string `mapstructure:"stats-namespace"`

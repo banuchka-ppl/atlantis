@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -28,6 +29,8 @@ const (
 	MaxStepResultDetailBytes = 55_000
 	// StepResultFileEnvVar tells a custom run step where it may publish a structured result.
 	StepResultFileEnvVar = "ATLANTIS_STEP_RESULT_FILE"
+	// StepResultModeEnvVar tells the result producer whether its typed result is shadowed or authoritative.
+	StepResultModeEnvVar = "ATLANTIS_STEP_RESULT_MODE"
 )
 
 // StructuredRunResultMode controls how custom run steps publish structured results.
@@ -40,7 +43,7 @@ const (
 	StructuredRunResultModeShadow StructuredRunResultMode = "shadow"
 	// StructuredRunResultModePrefer returns valid structured results to callers and falls back to legacy output.
 	StructuredRunResultModePrefer StructuredRunResultMode = "prefer"
-	// StructuredRunResultModeRequired requires valid structured results from eligible plan steps.
+	// StructuredRunResultModeRequired requires valid structured results from eligible command steps.
 	StructuredRunResultModeRequired StructuredRunResultMode = "required"
 )
 
@@ -230,6 +233,47 @@ func CompareStructuredRunResult(completed CompletedRun) StructuredRunResultCompa
 	if completed.Result.Review == nil ||
 		completed.Result.Review.DetailMode != legacyReviewDetailMode(completed.Execution.ConsoleOutput) {
 		return StructuredRunResultComparisonReviewDetailMismatch
+	}
+	return StructuredRunResultComparisonMatch
+}
+
+var legacyApplySummaryPattern = regexp.MustCompile(
+	`(?m)^\s*Apply complete! Resources: ([0-9]+) added, ([0-9]+) changed, ([0-9]+) destroyed\.\s*$`,
+)
+
+// CompareStructuredApplyResult compares typed apply facts with the legacy
+// terminal summary used only during shadow migration.
+func CompareStructuredApplyResult(completed CompletedRun) StructuredRunResultComparison {
+	typedSuccess := completed.Result.Outcome == StepResultOutcomeSuccess
+	legacySuccess := completed.Execution.Err == nil
+	if typedSuccess != legacySuccess {
+		return StructuredRunResultComparisonOutcomeMismatch
+	}
+	if !typedSuccess {
+		return StructuredRunResultComparisonMatch
+	}
+	typedChanges := completed.Result.Changes
+	if typedChanges == nil {
+		return StructuredRunResultComparisonChangePresenceMismatch
+	}
+	if typedChanges.HasOutputOnlyChanges || typedChanges.Import > 0 || typedChanges.Forget > 0 {
+		return StructuredRunResultComparisonLegacyUnavailable
+	}
+	match := legacyApplySummaryPattern.FindStringSubmatch(completed.Execution.ConsoleOutput)
+	if match == nil {
+		return StructuredRunResultComparisonLegacyUnavailable
+	}
+	legacyAdd, _ := strconv.Atoi(match[1])
+	legacyChange, _ := strconv.Atoi(match[2])
+	legacyDestroy, _ := strconv.Atoi(match[3])
+	legacyHasChanges := legacyAdd > 0 || legacyChange > 0 || legacyDestroy > 0
+	if typedChanges.HasChanges != legacyHasChanges {
+		return StructuredRunResultComparisonChangePresenceMismatch
+	}
+	if typedChanges.Add != legacyAdd ||
+		typedChanges.Change != legacyChange ||
+		typedChanges.Destroy != legacyDestroy {
+		return StructuredRunResultComparisonCountMismatch
 	}
 	return StructuredRunResultComparisonMatch
 }

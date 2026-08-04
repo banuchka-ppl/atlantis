@@ -1290,6 +1290,37 @@ Fork-only hidden option that updates an existing marked native Atlantis result c
 
 This only applies to native result comments that fit in one GitHub comment. If the result would be split or truncated, Atlantis keeps the existing create-comment behavior and does not add a native result marker for that oversized result.
 
+### `--pplx-structured-apply-results-mode`
+
+```bash
+atlantis server --pplx-structured-apply-results-mode=shadow
+# or
+ATLANTIS_PPLX_STRUCTURED_APPLY_RESULTS_MODE=shadow
+```
+
+Fork-only hidden option that independently controls the structured-result
+migration for eligible apply custom run steps. Supported values are `off`,
+`shadow`, `prefer`, and `required`; the default is `off`. It uses the repository
+and workflow allowlists documented below.
+
+For every enabled mode, Atlantis appends both `ATLANTIS_STEP_RESULT_FILE` and
+`ATLANTIS_STEP_RESULT_MODE` after workflow-defined environment variables. The
+result contract carries the apply outcome, normalized changes, and an optional
+bounded diagnostic sidecar.
+
+In `shadow`, Atlantis validates and compares an optional typed result while the
+legacy process result and output remain authoritative. In `prefer`, a valid
+typed result becomes authoritative for apply rendering, no-change
+classification, statuses, and native-result metadata; missing or invalid
+results fall back to legacy behavior. In `required`, a missing or invalid result
+fails the apply step after command execution. Atlantis also fails before command
+execution if it cannot allocate the protected result path.
+
+Use `shadow` before either authoritative mode. Apply may already have mutated
+Terraform state when post-execution result validation fails, so operators must
+inspect the typed diagnostic and Terraform state before retrying a required-mode
+failure.
+
 ### `--pplx-structured-run-results-mode`
 
 ```bash
@@ -1302,7 +1333,7 @@ Fork-only hidden option that controls the structured-result migration for custom
 run steps. Supported values are `off`, `shadow`, `prefer`, and `required`.
 Defaults to `off`.
 
-In `shadow` mode, Atlantis gives eligible plan/apply custom run steps a unique
+In `shadow` mode, Atlantis gives eligible plan custom run steps a unique
 `ATLANTIS_STEP_RESULT_FILE` path under the project working directory. Eligibility
 requires explicit matches in both
 `--pplx-structured-run-results-repo-allowlist` and
@@ -1317,15 +1348,14 @@ validation, comparison telemetry, and cleanup behavior. A valid plan result
 becomes authoritative for reviewer output, change counts, no-op and output-only
 classification, commit statuses, and native-result metadata. Missing or invalid
 results fall back to the existing output and emit the structured-result failure
-signal. Apply rendering remains on the legacy path until its separate cutover.
+signal.
 
 In `required` mode, an eligible plan custom run step must publish a valid
 structured result. Missing or invalid results fail the step instead of falling
 back to legacy output, and Atlantis fails before running the step if it cannot
-allocate the protected result path. `required` does not expose a result path to
-apply steps or change their legacy behavior; structured apply results require a
-separate contract and rollout. Repository and workflow allowlists continue to
-scope the mode, and out-of-scope steps keep their existing behavior.
+allocate the protected result path. This flag does not expose a result path to
+apply steps or change their legacy behavior. Repository and workflow allowlists
+continue to scope the mode, and out-of-scope steps keep their existing behavior.
 
 Atlantis removes the per-step result directory after processing. Workflow
 environment configuration cannot override the path selected by Atlantis.

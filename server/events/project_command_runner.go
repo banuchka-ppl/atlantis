@@ -380,12 +380,13 @@ func (p *DefaultProjectCommandRunner) PolicyCheck(ctx command.ProjectContext) co
 
 // Apply runs terraform apply for the project described by ctx.
 func (p *DefaultProjectCommandRunner) Apply(ctx command.ProjectContext) command.ProjectCommandOutput {
-	applyOut, applyURL, failure, err := p.doApply(ctx)
+	applyOut, applyURL, projectRunResult, failure, err := p.doApply(ctx)
 	return command.ProjectCommandOutput{
-		Failure:         failure,
-		Error:           err,
-		ApplySuccess:    applyOut,
-		ApplySuccessURL: applyURL,
+		Failure:          failure,
+		Error:            err,
+		ApplySuccess:     applyOut,
+		ApplySuccessURL:  applyURL,
+		ProjectRunResult: projectRunResult,
 	}
 }
 
@@ -885,76 +886,76 @@ func (p *DefaultProjectCommandRunner) doPlan(
 	}, projectRunResult, "", 0, nil
 }
 
-func (p *DefaultProjectCommandRunner) doApply(ctx command.ProjectContext) (applyOut string, applyURL string, failure string, err error) {
+func (p *DefaultProjectCommandRunner) doApply(ctx command.ProjectContext) (applyOut string, applyURL string, projectRunResult *models.ProjectRunResult, failure string, err error) {
 	var remoteApplyRunURL string
 	if validator, ok := p.ApplyPlanValidator.(ApplyCommandStartValidator); ok {
 		if err := validator.ValidateCommandStartHead(ctx); err != nil {
-			return "", "", "", err
+			return "", "", nil, "", err
 		}
 	}
 
 	repoDir, err := p.WorkingDir.GetWorkingDir(ctx.Pull.BaseRepo, ctx.Pull, ctx.Workspace)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", "", "", errors.New("project has not been cloned–did you run plan?")
+			return "", "", nil, "", errors.New("project has not been cloned–did you run plan?")
 		}
-		return "", "", "", err
+		return "", "", nil, "", err
 	}
 	absPath := filepath.Join(repoDir, ctx.RepoRelDir)
 	if err := utils.EnsureSubPath(repoDir, absPath); err != nil {
-		return "", "", "", fmt.Errorf("project path traversal detected: %w", err)
+		return "", "", nil, "", fmt.Errorf("project path traversal detected: %w", err)
 	}
 	if _, err = os.Stat(absPath); os.IsNotExist(err) {
-		return "", "", "", DirNotExistErr{RepoRelDir: ctx.RepoRelDir}
+		return "", "", nil, "", DirNotExistErr{RepoRelDir: ctx.RepoRelDir}
 	}
 
 	failure, err = p.CommandRequirementHandler.ValidateApplyProject(repoDir, ctx)
 	if failure != "" || err != nil {
-		return "", "", failure, err
+		return "", "", nil, failure, err
 	}
 
 	failure, err = p.CommandRequirementHandler.ValidateProjectDependencies(ctx)
 	if failure != "" || err != nil {
-		return "", "", failure, err
+		return "", "", nil, failure, err
 	}
 
 	// Acquire Atlantis lock for this repo/dir/workspace.
 	lockAttempt, err := p.Locker.TryLock(ctx.Log, ctx.Pull, ctx.User, ctx.Workspace, models.NewProject(ctx.Pull.BaseRepo.FullName, ctx.RepoRelDir, ctx.ProjectName), ctx.RepoLocksMode == valid.RepoLocksOnApplyMode)
 	if err != nil {
-		return "", "", "", fmt.Errorf("acquiring lock: %w", err)
+		return "", "", nil, "", fmt.Errorf("acquiring lock: %w", err)
 	}
 	if !lockAttempt.LockAcquired {
-		return "", "", lockAttempt.LockFailureReason, nil
+		return "", "", nil, lockAttempt.LockFailureReason, nil
 	}
 	ctx.Log.Debug("acquired lock for project")
 
 	// Acquire internal lock for the directory we're going to operate in.
 	unlockFn, err := p.WorkingDirLocker.TryLock(ctx.Pull.BaseRepo.FullName, ctx.Pull.Num, ctx.Workspace, ctx.RepoRelDir, ctx.ProjectName, command.Apply)
 	if err != nil {
-		return "", "", "", err
+		return "", "", nil, "", err
 	}
 	defer unlockFn()
 
 	if p.ApplyPlanValidator != nil {
 		if err := p.ApplyPlanValidator.ValidateProjectPlan(ctx, absPath); err != nil {
-			return "", "", "", err
+			return "", "", nil, "", err
 		}
 	}
 	_, usingDefaultApplyPlanValidator := p.ApplyPlanValidator.(*DefaultApplyPlanValidator)
 	if ctx.CommandName == command.Apply && ctx.ExpectedPlanHash == "" && usingDefaultApplyPlanValidator {
 		planPath, err := safePlanFilePath(ctx, absPath)
 		if err != nil {
-			return "", "", "", err
+			return "", "", nil, "", err
 		}
 		planHash, err := hashFile(absPath, planPath)
 		if err != nil {
-			return "", "", "", fmt.Errorf("hashing plan file for dir %q workspace %q project %q: %w", ctx.RepoRelDir, ctx.Workspace, ctx.ProjectName, err)
+			return "", "", nil, "", fmt.Errorf("hashing plan file for dir %q workspace %q project %q: %w", ctx.RepoRelDir, ctx.Workspace, ctx.ProjectName, err)
 		}
 		ctx.ExpectedPlanHash = planHash
 	}
 
 	if err := ValidateNonPRAPIRefUnchanged(ctx, repoDir); err != nil {
-		return "", "", "", err
+		return "", "", nil, "", err
 	}
 
 	if _, ok := p.ApplyStepRunner.(*runtime.ApplyStepRunner); ok {
@@ -962,6 +963,7 @@ func (p *DefaultProjectCommandRunner) doApply(ctx command.ProjectContext) (apply
 	}
 	stepResults, err := p.runSteps(ctx.Steps, ctx, absPath)
 	outputs := stepResults.Outputs
+	projectRunResult = newProjectRunResult(stepResults.StructuredResult)
 	if err == nil {
 		err = ValidateNonPRAPIRefUnchanged(ctx, repoDir)
 	}
@@ -984,10 +986,14 @@ func (p *DefaultProjectCommandRunner) doApply(ctx command.ProjectContext) (apply
 	}
 
 	if err != nil {
-		return "", remoteApplyRunURL, "", errorWithStepOutput(err, outputs)
+		return "", remoteApplyRunURL, projectRunResult, "", errorWithStepOutput(err, outputs)
 	}
 
-	return strings.Join(outputs, "\n"), remoteApplyRunURL, "", nil
+	applyOutput := strings.Join(outputs, "\n")
+	if projectRunResult != nil {
+		applyOutput = projectRunResult.ReviewOutput()
+	}
+	return applyOutput, remoteApplyRunURL, projectRunResult, "", nil
 }
 
 func (p *DefaultProjectCommandRunner) doVersion(ctx command.ProjectContext) (versionOut string, failure string, err error) {

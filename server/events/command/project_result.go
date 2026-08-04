@@ -5,9 +5,12 @@ package command
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/runatlantis/atlantis/server/events/models"
 )
+
+var applyNoChangesPattern = regexp.MustCompile(`(?m)^\s*Apply complete! Resources: 0 added, 0 changed, 0 destroyed\.$`)
 
 type ProjectFailureReason string
 
@@ -94,6 +97,8 @@ func (p ProjectResult) PlanStatus() models.ProjectPlanStatus {
 			return models.ErroredApplyStatus
 		} else if p.Failure != "" {
 			return models.ErroredApplyStatus
+		} else if p.ApplyNoChanges() {
+			return models.PlannedNoChangesPlanStatus
 		}
 		return models.AppliedPlanStatus
 	case Import, State:
@@ -114,6 +119,14 @@ func (p ProjectCommandOutput) PlanNoChanges() bool {
 		return !p.ProjectRunResult.Changes.HasChanges
 	}
 	return p.PlanSuccess != nil && p.PlanSuccess.NoChanges()
+}
+
+// ApplyNoChanges reports the authoritative apply change classification.
+func (p ProjectCommandOutput) ApplyNoChanges() bool {
+	if p.ProjectRunResult != nil && p.ProjectRunResult.Changes != nil {
+		return !p.ProjectRunResult.Changes.HasChanges
+	}
+	return applyNoChangesPattern.MatchString(p.ApplySuccess)
 }
 
 // PlanStats returns typed plan counts when available and otherwise uses legacy output.

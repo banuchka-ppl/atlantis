@@ -176,6 +176,10 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	structuredApplyResultsMode, err := runtime.ParseStructuredRunResultMode(userConfig.PPLXStructuredApplyResultsMode)
+	if err != nil {
+		return nil, err
+	}
 	structuredRunResultRepoPatterns, err := runtime.ParseStructuredRunResultRepoPatterns(
 		userConfig.PPLXStructuredResultRepos,
 	)
@@ -679,6 +683,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		TerraformBinDir:                     terraformClient.TerraformBinDir(),
 		ProjectCmdOutputHandler:             projectCmdOutputHandler,
 		StructuredRunResultsMode:            structuredRunResultsMode,
+		StructuredApplyResultsMode:          structuredApplyResultsMode,
 		StructuredRunResultRepoPatterns:     structuredRunResultRepoPatterns,
 		StructuredRunResultWorkflowPatterns: structuredRunResultWorkflowPatterns,
 		StructuredRunResultObserver: runtime.StructuredRunResultObserver{

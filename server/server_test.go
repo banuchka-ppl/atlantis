@@ -134,6 +134,19 @@ func TestNewServer_RejectsUnknownStructuredRunResultMode(t *testing.T) {
 	)
 }
 
+func TestNewServer_RejectsUnknownStructuredApplyResultMode(t *testing.T) {
+	_, err := server.NewServer(
+		server.UserConfig{PPLXStructuredApplyResultsMode: "unknown"},
+		server.Config{},
+	)
+
+	ErrEquals(
+		t,
+		`invalid structured run result mode "unknown": must be one of [off shadow prefer required]`,
+		err,
+	)
+}
+
 func TestNewServer_RejectsInvalidStructuredRunResultWorkflowAllowlist(t *testing.T) {
 	_, err := server.NewServer(
 		server.UserConfig{

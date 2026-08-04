@@ -321,6 +321,7 @@ func (m *MarkdownRenderer) renderProjectResults(ctx *command.Context, results []
 			} else {
 				resultData.Rendered = m.renderTemplateTrimSpace(templates.Lookup("applyUnwrappedSuccess"), struct{ Output string }{output})
 			}
+			resultData.NoChanges = result.ApplyNoChanges()
 			numApplySuccesses++
 		} else if result.VersionSuccess != "" {
 			output := strings.TrimSpace(result.VersionSuccess)

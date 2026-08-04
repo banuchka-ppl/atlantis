@@ -124,6 +124,7 @@ const (
 	PPLXNativeResultCommentMarkers   = "pplx-native-result-comment-markers"
 	PPLXNativeResultCommentUpsert    = "pplx-native-result-comment-upsert"
 	PPLXStructuredRunResultsMode     = "pplx-structured-run-results-mode"
+	PPLXStructuredApplyResultsMode   = "pplx-structured-apply-results-mode"
 	PPLXStructuredResultRepos        = "pplx-structured-run-results-repo-allowlist"
 	PPLXStructuredResultWorkflows    = "pplx-structured-run-results-workflow-allowlist"
 	StatsNamespace                   = "stats-namespace"
@@ -517,7 +518,12 @@ var stringFlags = map[string]stringFlag{
 			"Supports partial overrides and can be combined with --language.",
 	},
 	PPLXStructuredRunResultsMode: {
-		description:  "Fork-only rollout mode for structured custom-run results. Supported values: off, shadow, prefer, required.",
+		description:  "Fork-only rollout mode for structured plan results. Supported values: off, shadow, prefer, required.",
+		defaultValue: DefaultPPLXStructuredRunResultsMode,
+		hidden:       true,
+	},
+	PPLXStructuredApplyResultsMode: {
+		description:  "Fork-only rollout mode for structured apply results. Supported values: off, shadow, prefer, required.",
 		defaultValue: DefaultPPLXStructuredRunResultsMode,
 		hidden:       true,
 	},
@@ -1053,6 +1059,9 @@ func (s *ServerCmd) setDefaults(c *server.UserConfig, v *viper.Viper) {
 	if c.PPLXStructuredRunResultsMode == "" {
 		c.PPLXStructuredRunResultsMode = DefaultPPLXStructuredRunResultsMode
 	}
+	if c.PPLXStructuredApplyResultsMode == "" {
+		c.PPLXStructuredApplyResultsMode = DefaultPPLXStructuredRunResultsMode
+	}
 	if c.StatsNamespace == "" {
 		c.StatsNamespace = DefaultStatsNamespace
 	}
@@ -1127,6 +1136,9 @@ func (s *ServerCmd) validate(userConfig server.UserConfig) error {
 	}
 	if _, err := runtime.ParseStructuredRunResultMode(userConfig.PPLXStructuredRunResultsMode); err != nil {
 		return fmt.Errorf("invalid --%s: %w", PPLXStructuredRunResultsMode, err)
+	}
+	if _, err := runtime.ParseStructuredRunResultMode(userConfig.PPLXStructuredApplyResultsMode); err != nil {
+		return fmt.Errorf("invalid --%s: %w", PPLXStructuredApplyResultsMode, err)
 	}
 	if _, err := runtime.ParseStructuredRunResultRepoPatterns(userConfig.PPLXStructuredResultRepos); err != nil {
 		return fmt.Errorf("invalid --%s: %w", PPLXStructuredResultRepos, err)

@@ -521,6 +521,110 @@ func TestRunStepRunner_RequiredDoesNotChangeApplyOrOutOfScopeRuns(t *testing.T) 
 	}
 }
 
+func TestRunStepRunner_ApplyModeIsIndependentFromRequiredPlanMode(t *testing.T) {
+	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
+	runner.StructuredApplyResultsMode = runtime.StructuredRunResultModeShadow
+	ctx.CommandName = command.Apply
+	workingDir := t.TempDir()
+	applyResult := `{"schema_version":1,"outcome":"success","summary":"Terraform apply completed with changes.","changes":{"has_changes":true,"has_output_only_changes":false,"add":1,"change":0,"destroy":0,"import":0,"forget":0}}`
+	command := fmt.Sprintf(
+		`test "$%s" = shadow && printf '%%s' '%s' > "$%s" && printf 'legacy apply\n'`,
+		runtime.StepResultModeEnvVar,
+		applyResult,
+		runtime.StepResultFileEnvVar,
+	)
+
+	result, err := runner.RunWithResult(
+		ctx,
+		nil,
+		command,
+		workingDir,
+		nil,
+		false,
+		nil,
+		nil,
+	)
+
+	Ok(t, err)
+	Equals(t, "legacy apply\n", result.ConsoleOutput)
+	Assert(t, result.StructuredResult == nil, "shadow apply result must not become authoritative")
+	assertNoStructuredResultDirectories(t, workingDir)
+}
+
+func TestRunStepRunner_ZeroValuePlanModeDoesNotExposePath(t *testing.T) {
+	runner, ctx := newStructuredResultRunStepRunner(t, "")
+	workingDir := t.TempDir()
+
+	output, err := runner.Run(
+		ctx,
+		nil,
+		`if [ -z "${ATLANTIS_STEP_RESULT_FILE+x}" ]; then printf 'legacy\n'; else printf 'exposed\n'; fi`,
+		workingDir,
+		nil,
+		false,
+		nil,
+		nil,
+	)
+
+	Ok(t, err)
+	Equals(t, "legacy\n", output)
+	assertNoStructuredResultDirectories(t, workingDir)
+}
+
+func TestRunStepRunner_PreferApplyReturnsValidatedResult(t *testing.T) {
+	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
+	runner.StructuredApplyResultsMode = runtime.StructuredRunResultModePrefer
+	ctx.CommandName = command.Apply
+	workingDir := t.TempDir()
+	applyResult := `{"schema_version":1,"outcome":"success","summary":"Terraform apply completed with changes.","changes":{"has_changes":true,"has_output_only_changes":false,"add":1,"change":0,"destroy":0,"import":0,"forget":0}}`
+	command := fmt.Sprintf(
+		`test "$%s" = prefer && printf '%%s' '%s' > "$%s" && printf 'legacy apply\n'`,
+		runtime.StepResultModeEnvVar,
+		applyResult,
+		runtime.StepResultFileEnvVar,
+	)
+
+	result, err := runner.RunWithResult(
+		ctx,
+		nil,
+		command,
+		workingDir,
+		nil,
+		false,
+		nil,
+		nil,
+	)
+
+	Ok(t, err)
+	Equals(t, "legacy apply\n", result.ConsoleOutput)
+	Assert(t, result.StructuredResult != nil, "prefer apply result must be authoritative")
+	Equals(t, 1, result.StructuredResult.Result.Changes.Add)
+	assertNoStructuredResultDirectories(t, workingDir)
+}
+
+func TestRunStepRunner_RequiredApplyRejectsMissingResultAfterCommand(t *testing.T) {
+	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
+	runner.StructuredApplyResultsMode = runtime.StructuredRunResultModeRequired
+	ctx.CommandName = command.Apply
+	workingDir := t.TempDir()
+
+	result, err := runner.RunWithResult(
+		ctx,
+		nil,
+		`printf 'apply command completed\n'`,
+		workingDir,
+		nil,
+		false,
+		nil,
+		nil,
+	)
+
+	ErrContains(t, "required structured run result is missing", err)
+	Equals(t, "apply command completed\n", result.ConsoleOutput)
+	Assert(t, result.StructuredResult == nil, "did not expect a structured result")
+	assertNoStructuredResultDirectories(t, workingDir)
+}
+
 func TestRunStepRunner_RequiredFailsBeforeCommandWhenResultPathCannotBeAllocated(t *testing.T) {
 	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
 	scope := tally.NewTestScope("structured", nil)
