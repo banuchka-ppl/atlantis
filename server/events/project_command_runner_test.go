@@ -187,6 +187,54 @@ func TestDefaultProjectCommandRunner_PlanRetainsPreferredStructuredError(t *test
 	Equals(t, "typed bounded diagnostic", result.ReviewerError())
 }
 
+func TestDefaultProjectCommandRunner_ApplyUsesPreferredStructuredResult(t *testing.T) {
+	runResult := &runtime.CompletedRun{
+		Result: runtime.StepResultV1{
+			SchemaVersion: runtime.StepResultSchemaVersion,
+			Outcome:       runtime.StepResultOutcomeSuccess,
+			Summary:       "Terraform apply completed with changes.",
+			Changes: &runtime.StepChangeSummary{
+				HasChanges: true,
+				Change:     2,
+			},
+		},
+	}
+
+	result := runApplyWithPreferredStructuredResult(t, runResult, nil)
+
+	Ok(t, result.Error)
+	Equals(t, "Terraform apply completed with changes.", result.ApplySuccess)
+	Assert(t, result.ProjectRunResult != nil, "expected the typed apply result")
+	Equals(t, models.ProjectRunOutcomeSuccess, result.ProjectRunResult.Outcome)
+	Equals(t, 2, result.ProjectRunResult.Changes.Change)
+}
+
+func TestDefaultProjectCommandRunner_ApplyRetainsPreferredStructuredError(t *testing.T) {
+	runResult := &runtime.CompletedRun{
+		Result: runtime.StepResultV1{
+			SchemaVersion: runtime.StepResultSchemaVersion,
+			Outcome:       runtime.StepResultOutcomeError,
+			Summary:       "Terraform apply failed.",
+			Diagnostic: &runtime.StepDiagnostic{
+				Code:    models.ProjectRunDiagnosticCodeTerraformFailed,
+				Summary: "Terraform apply failed.",
+			},
+		},
+		DiagnosticDetail: "typed bounded apply diagnostic",
+	}
+
+	result := runApplyWithPreferredStructuredResult(
+		t,
+		runResult,
+		errors.New("legacy operational apply failure"),
+	)
+
+	Assert(t, result.Error != nil, "expected an apply error")
+	Assert(t, result.ProjectRunResult != nil, "expected the typed apply error")
+	Equals(t, models.ProjectRunOutcomeError, result.ProjectRunResult.Outcome)
+	Equals(t, "typed bounded apply diagnostic", result.ReviewerError())
+}
+
 func TestDefaultProjectCommandRunner_PlanPreservesBlockingPull(t *testing.T) {
 	RegisterMockTestingT(t)
 	mockLocker := mocks.NewMockProjectLocker()
@@ -2864,6 +2912,63 @@ func runPlanWithPreferredStructuredResult(
 	}, nil)
 
 	return runner.Plan(ctx)
+}
+
+func runApplyWithPreferredStructuredResult(
+	t *testing.T,
+	runResult *runtime.CompletedRun,
+	runErr error,
+) command.ProjectCommandOutput {
+	t.Helper()
+	RegisterMockTestingT(t)
+	mockWorkingDir := mocks.NewMockWorkingDir()
+	mockLocker := mocks.NewMockProjectLocker()
+	mockCommandRequirementHandler := mocks.NewMockCommandRequirementHandler()
+	runner := events.DefaultProjectCommandRunner{
+		Locker: mockLocker,
+		RunStepRunner: preferredCustomStepRunner{
+			result: runtime.RunStepOutput{
+				ConsoleOutput:    "legacy apply console output",
+				StructuredResult: runResult,
+			},
+			err: runErr,
+		},
+		WorkingDir:                mockWorkingDir,
+		WorkingDirLocker:          events.NewDefaultWorkingDirLocker(),
+		CommandRequirementHandler: mockCommandRequirementHandler,
+	}
+	repoDir := t.TempDir()
+	ctx := command.ProjectContext{
+		CommandName: command.Apply,
+		Log:         logging.NewNoopLogger(t),
+		RepoRelDir:  ".",
+		Steps:       []valid.Step{{StepName: "run"}},
+		Workspace:   "default",
+	}
+	When(mockWorkingDir.GetWorkingDir(
+		Any[models.Repo](),
+		Any[models.PullRequest](),
+		Any[string](),
+	)).ThenReturn(repoDir, nil)
+	When(mockWorkingDir.GitReadLock(
+		Any[models.Repo](),
+		Any[models.PullRequest](),
+		Any[string](),
+	)).ThenReturn(func() {})
+	When(mockLocker.TryLock(
+		Any[logging.SimpleLogging](),
+		Any[models.PullRequest](),
+		Any[models.User](),
+		Any[string](),
+		Any[models.Project](),
+		AnyBool(),
+	)).ThenReturn(&events.TryLockResponse{
+		LockAcquired: true,
+		LockKey:      "lock-key",
+		UnlockFn:     func() error { return nil },
+	}, nil)
+
+	return runner.Apply(ctx)
 }
 
 func erroredPolicyProjectResult(ctx command.ProjectContext) command.ProjectResult {

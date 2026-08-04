@@ -333,6 +333,48 @@ func TestPlanSuccess_Summary(t *testing.T) {
 	}
 }
 
+func TestProjectCommandOutput_ApplyNoChangesUsesTypedFacts(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   command.ProjectCommandOutput
+		expected bool
+	}{
+		{
+			name: "typed no-op overrides changed legacy text",
+			result: command.ProjectCommandOutput{
+				ApplySuccess: "Apply complete! Resources: 1 added, 0 changed, 0 destroyed.",
+				ProjectRunResult: &models.ProjectRunResult{
+					Changes: &models.ProjectRunChangeSummary{},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "typed changes override no-op legacy text",
+			result: command.ProjectCommandOutput{
+				ApplySuccess: "Apply complete! Resources: 0 added, 0 changed, 0 destroyed.",
+				ProjectRunResult: &models.ProjectRunResult{
+					Changes: &models.ProjectRunChangeSummary{HasChanges: true, Change: 1},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "legacy no-op fallback",
+			result: command.ProjectCommandOutput{
+				ApplySuccess: "Apply complete! Resources: 0 added, 0 changed, 0 destroyed.",
+			},
+			expected: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			Equals(t, test.expected, test.result.ApplyNoChanges())
+		})
+	}
+}
+
 // TestProjectResult_MarshalJSON verifies that ProjectResult serializes errors properly
 // and maintains backwards-compatible flat JSON structure (no ProjectCommandOutput wrapper).
 func TestProjectResult_MarshalJSON(t *testing.T) {

@@ -159,3 +159,62 @@ func TestCompareStructuredRunResult(t *testing.T) {
 		})
 	}
 }
+
+func TestCompareStructuredApplyResult(t *testing.T) {
+	tests := []struct {
+		name       string
+		completion runtime.CompletedRun
+		expected   runtime.StructuredRunResultComparison
+	}{
+		{
+			name: "matching changes",
+			completion: runtime.CompletedRun{
+				Execution: runtime.RunExecution{ConsoleOutput: "Apply complete! Resources: 1 added, 2 changed, 3 destroyed.\n"},
+				Result: runtime.StepResultV1{
+					Outcome: runtime.StepResultOutcomeSuccess,
+					Changes: &runtime.StepChangeSummary{HasChanges: true, Add: 1, Change: 2, Destroy: 3},
+				},
+			},
+			expected: runtime.StructuredRunResultComparisonMatch,
+		},
+		{
+			name: "matching no-op",
+			completion: runtime.CompletedRun{
+				Execution: runtime.RunExecution{ConsoleOutput: "Apply complete! Resources: 0 added, 0 changed, 0 destroyed.\n"},
+				Result: runtime.StepResultV1{
+					Outcome: runtime.StepResultOutcomeSuccess,
+					Changes: &runtime.StepChangeSummary{},
+				},
+			},
+			expected: runtime.StructuredRunResultComparisonMatch,
+		},
+		{
+			name: "count mismatch",
+			completion: runtime.CompletedRun{
+				Execution: runtime.RunExecution{ConsoleOutput: "Apply complete! Resources: 1 added, 0 changed, 0 destroyed.\n"},
+				Result: runtime.StepResultV1{
+					Outcome: runtime.StepResultOutcomeSuccess,
+					Changes: &runtime.StepChangeSummary{HasChanges: true, Add: 2},
+				},
+			},
+			expected: runtime.StructuredRunResultComparisonCountMismatch,
+		},
+		{
+			name: "output-only is unavailable from legacy apply text",
+			completion: runtime.CompletedRun{
+				Execution: runtime.RunExecution{ConsoleOutput: "Apply complete! Resources: 0 added, 0 changed, 0 destroyed.\n"},
+				Result: runtime.StepResultV1{
+					Outcome: runtime.StepResultOutcomeSuccess,
+					Changes: &runtime.StepChangeSummary{HasChanges: true, HasOutputOnlyChanges: true},
+				},
+			},
+			expected: runtime.StructuredRunResultComparisonLegacyUnavailable,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			Equals(t, test.expected, runtime.CompareStructuredApplyResult(test.completion))
+		})
+	}
+}
