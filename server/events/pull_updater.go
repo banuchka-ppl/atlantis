@@ -84,6 +84,18 @@ func (c *PullUpdater) updatePull(ctx *command.Context, cmd PullCommand, res comm
 	}
 
 	if marker != "" && (c.NativeResultCommentMarkersEnabled || !upsertUnsupported) {
+		if commenter, ok := c.VCSClient.(vcs.NativeResultTrailerCommenter); ok {
+			err := commenter.CreateCommentWithNativeResultTrailer(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull.Num, comment, cmd.CommandName().String(), marker)
+			if err == nil {
+				return
+			}
+			if !errors.Is(err, vcs.ErrNativeResultTrailerCommentUnsupported) {
+				// Do not retry through CreateComment: the trailer commenter may
+				// have already posted part of the split comment chain.
+				ctx.Log.Err("unable to comment: %s", err)
+				return
+			}
+		}
 		comment = appendNativeResultCommentMarker(comment, marker)
 	}
 	if err := c.VCSClient.CreateComment(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull.Num, comment, cmd.CommandName().String()); err != nil {
