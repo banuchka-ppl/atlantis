@@ -1568,6 +1568,96 @@ func TestClient_SplitComments(t *testing.T) {
 	Assert(t, strings.Contains(secondSplit, "continued from previous comment"), fmt.Sprintf("comment should contain no reference to the command name but was %q", secondSplit))
 }
 
+func TestClient_CreateCommentWithNativeResultTrailer(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	marker := "<!-- atlantis-native-result:v2:dGVzdA -->"
+	type githubComment struct {
+		Body string `json:"body"`
+	}
+	var githubComments []githubComment
+
+	testServer := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method + " " + r.RequestURI {
+			case "POST /api/v3/repos/runatlantis/atlantis/issues/1/comments":
+				defer r.Body.Close() // nolint: errcheck
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read body error: %v", err)
+					http.Error(w, "server error", http.StatusInternalServerError)
+					return
+				}
+				requestBody := githubComment{}
+				err = json.Unmarshal(body, &requestBody)
+				if err != nil {
+					t.Errorf("parse body error: %v", err)
+					http.Error(w, "server error", http.StatusInternalServerError)
+					return
+				}
+				githubComments = append(githubComments, requestBody)
+				return
+			default:
+				t.Errorf("got unexpected request at %q", r.RequestURI)
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+		}))
+
+	testServerURL, err := url.Parse(testServer.URL)
+	Ok(t, err)
+	client, err := github.New(testServerURL.Host, &github.UserCredentials{"user", "pass", ""}, github.Config{}, 0, logging.NewNoopLogger(t))
+	Ok(t, err)
+	defer disableSSLVerification()()
+	repo := models.Repo{
+		FullName: "runatlantis/atlantis",
+		Owner:    "runatlantis",
+		Name:     "atlantis",
+		VCSHost: models.VCSHost{
+			Type:     models.Github,
+			Hostname: "github.com",
+		},
+	}
+
+	assertIntactTrailer := func(t *testing.T, comments []githubComment) {
+		t.Helper()
+		for i, comment := range comments {
+			Assert(t, len(comment.Body) <= 65536, "comment %d length %d exceeds GitHub limit", i, len(comment.Body))
+			isLast := i == len(comments)-1
+			Equals(t, isLast, strings.Contains(comment.Body, marker))
+			if isLast {
+				Assert(t, strings.HasSuffix(comment.Body, "\n\n"+marker), "final comment must end with the intact marker trailer")
+			} else {
+				Assert(t, !strings.Contains(comment.Body, "atlantis-native-result"), "non-final comment %d must not contain marker fragments", i)
+			}
+		}
+	}
+
+	// Short comment: marker rides the single comment.
+	err = client.CreateCommentWithNativeResultTrailer(logger, repo, 1, "short apply output", command.Apply.String(), marker)
+	Ok(t, err)
+	Equals(t, 1, len(githubComments))
+	assertIntactTrailer(t, githubComments)
+
+	// Oversized comment: split chunks leave room for the trailer and the
+	// marker rides the final chunk intact.
+	githubComments = nil
+	err = client.CreateCommentWithNativeResultTrailer(logger, repo, 1, strings.Repeat("a", 3*65536), command.Apply.String(), marker)
+	Ok(t, err)
+	Assert(t, len(githubComments) > 1, "oversized comment should be split, got %d comments", len(githubComments))
+	assertIntactTrailer(t, githubComments)
+
+	// A marker too large to ride any comment is dropped instead of split.
+	githubComments = nil
+	hugeMarker := "<!-- atlantis-native-result:v2:" + strings.Repeat("h", 65536) + " -->"
+	err = client.CreateCommentWithNativeResultTrailer(logger, repo, 1, strings.Repeat("a", 2*65536), command.Apply.String(), hugeMarker)
+	Ok(t, err)
+	Assert(t, len(githubComments) > 1, "oversized comment should still be split, got %d comments", len(githubComments))
+	for i, comment := range githubComments {
+		Assert(t, len(comment.Body) <= 65536, "comment %d length %d exceeds GitHub limit", i, len(comment.Body))
+		Assert(t, !strings.Contains(comment.Body, "atlantis-native-result"), "comment %d must not contain any marker content", i)
+	}
+}
+
 func TestClient_UpsertNativeResultComment_UpdatesExisting(t *testing.T) {
 	logger := logging.NewNoopLogger(t)
 	marker := "<!-- atlantis-native-result:v1:test -->"

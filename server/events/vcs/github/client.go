@@ -29,6 +29,11 @@ import (
 // maxCommentLength is the maximum number of chars allowed in a single comment
 // by GitHub.
 const maxCommentLength = 65536
+
+// minNativeResultTrailerChunkSize is the smallest per-comment content budget
+// worth splitting for. A native result marker large enough to shrink chunks
+// below this could never ride a comment intact, so it is dropped instead.
+const minNativeResultTrailerChunkSize = 4096
 const pplxInitialCommentMarkerPrefix = "<!-- atlantis-initial-comment:v1 "
 
 var (
@@ -229,6 +234,10 @@ func (g *Client) CreateComment(logger logging.SimpleLogging, repo models.Repo, p
 	logger.Debug("Creating comment on GitHub pull request %d", pullNum)
 
 	comments := common.SplitComment(logger, comment, maxCommentLength, g.maxCommentsPerCommand, command)
+	return g.postComments(logger, repo, pullNum, comments)
+}
+
+func (g *Client) postComments(logger logging.SimpleLogging, repo models.Repo, pullNum int, comments []string) error {
 	for i := range comments {
 		_, resp, err := g.client.Issues.CreateComment(g.ctx, repo.Owner, repo.Name, pullNum, &github.IssueComment{Body: &comments[i]})
 		if resp != nil {
@@ -239,6 +248,30 @@ func (g *Client) CreateComment(logger logging.SimpleLogging, repo models.Repo, p
 		}
 	}
 	return nil
+}
+
+// CreateCommentWithNativeResultTrailer creates a comment carrying a native
+// result marker trailer. The marker always rides intact on the final comment:
+// when the comment must be split, chunks are sized to leave room for the
+// trailer so splitting can never slice the marker apart.
+func (g *Client) CreateCommentWithNativeResultTrailer(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+	logger.Debug("Creating comment with native result trailer on GitHub pull request %d", pullNum)
+
+	trailer := "\n\n" + marker
+	marked := strings.TrimRight(comment, "\n") + trailer
+	if len(marked) <= maxCommentLength {
+		return g.postComments(logger, repo, pullNum, []string{marked})
+	}
+
+	chunkSize := maxCommentLength - len(trailer)
+	if chunkSize < minNativeResultTrailerChunkSize {
+		logger.Err("native result marker length %d leaves no room for comment content; posting comment without marker", len(marker))
+		return g.CreateComment(logger, repo, pullNum, comment, command)
+	}
+
+	comments := common.SplitComment(logger, comment, chunkSize, g.maxCommentsPerCommand, command)
+	comments[len(comments)-1] = strings.TrimRight(comments[len(comments)-1], "\n") + trailer
+	return g.postComments(logger, repo, pullNum, comments)
 }
 
 func (g *Client) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {

@@ -87,6 +87,32 @@ func (c *InstrumentedClient) UpsertNativeResultComment(logger logging.SimpleLogg
 	return nil
 }
 
+func (c *InstrumentedClient) CreateCommentWithNativeResultTrailer(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+	scope := c.StatsScope.SubScope("create_comment_with_native_result_trailer")
+	scope = SetGitScopeTags(scope, repo.FullName, pullNum)
+
+	executionTime := scope.Timer(metrics.ExecutionTimeMetric).Start()
+	defer executionTime.Stop()
+
+	executionSuccess := scope.Counter(metrics.ExecutionSuccessMetric)
+	executionError := scope.Counter(metrics.ExecutionErrorMetric)
+
+	commenter, ok := c.Client.(vcs.NativeResultTrailerCommenter)
+	if !ok {
+		executionError.Inc(1)
+		return vcs.ErrNativeResultTrailerCommentUnsupported
+	}
+
+	if err := commenter.CreateCommentWithNativeResultTrailer(logger, repo, pullNum, comment, command, marker); err != nil {
+		executionError.Inc(1)
+		logger.Err("Unable to create comment with native result trailer for command %s, error: %s", command, err.Error())
+		return err
+	}
+
+	executionSuccess.Inc(1)
+	return nil
+}
+
 func (c *InstrumentedClient) ReactToComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, commentID int64, reaction string) error {
 	scope := c.StatsScope.SubScope("react_to_comment")
 

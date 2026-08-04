@@ -137,6 +137,36 @@ func TestNativeResultCommentMarkerRecordsProjectFailures(t *testing.T) {
 	}, payload.Failures)
 }
 
+func TestNativeResultCommentMarkerKeepsApplyIdentityEnvelopeOnly(t *testing.T) {
+	pull := testdata.Pull
+	pull.BaseRepo = testdata.GithubRepo
+	ctx := &command.Context{Pull: pull}
+	result := command.Result{ProjectResults: []command.ProjectResult{
+		{
+			ProjectCommandOutput: command.ProjectCommandOutput{ApplySuccess: "applied"},
+			RepoRelDir:           "infra/applied",
+			Workspace:            "default",
+			ProjectName:          "applied",
+		},
+		{
+			ProjectCommandOutput: command.ProjectCommandOutput{Error: errors.New("boom")},
+			RepoRelDir:           "infra/broken",
+			Workspace:            "default",
+			ProjectName:          "broken",
+		},
+	}}
+
+	marker, err := encodeNativeResultCommentMarker(ctx, &CommentCommand{Name: command.Apply}, result)
+	Ok(t, err)
+	payload := decodeNativeResultCommentMarkerForTest(t, marker)
+
+	Equals(t, "apply", payload.Command)
+	Equals(t, "error", payload.Outcome)
+	Equals(t, 2, payload.ProjectTotal)
+	Equals(t, 0, len(payload.Projects))
+	Equals(t, 0, len(payload.Failures))
+}
+
 func TestNativeResultCommentMarkerRecordsNoChangeProjectOutcomes(t *testing.T) {
 	pull := testdata.Pull
 	pull.BaseRepo = testdata.GithubRepo
@@ -390,6 +420,71 @@ func TestPullUpdaterFallsBackToUnmarkedCreateCommentWhenNativeResultUpsertUnsupp
 	Equals(t, false, strings.Contains(client.createdComment, nativeResultCommentMarkerPrefix))
 }
 
+func TestPullUpdaterRoutesNativeResultMarkerThroughTrailerCommenter(t *testing.T) {
+	client := &recordingNativeResultTrailerClient{}
+	pull := testdata.Pull
+	pull.BaseRepo = testdata.GithubRepo
+	ctx := &command.Context{
+		Pull: pull,
+		Log:  logging.NewNoopLogger(t).WithHistory(),
+	}
+	updater := &PullUpdater{
+		NativeResultCommentMarkersEnabled: true,
+		VCSClient:                         client,
+		MarkdownRenderer:                  NewMarkdownRenderer(false, false, false, false, false, false, "", "atlantis", false, false),
+	}
+
+	updater.updatePull(ctx, &CommentCommand{Name: command.Apply}, command.Result{Error: errors.New("boom")})
+
+	Equals(t, 1, client.trailerCalls)
+	Equals(t, 0, client.createCalls)
+	Equals(t, command.Apply.String(), client.trailerCommand)
+	Equals(t, false, strings.Contains(client.trailerComment, nativeResultCommentMarkerPrefix))
+	payload := decodeNativeResultCommentMarkerForTest(t, client.trailerMarker)
+	Equals(t, "apply", payload.Command)
+}
+
+func TestPullUpdaterFallsBackToMarkedCreateCommentWhenTrailerUnsupported(t *testing.T) {
+	client := &recordingNativeResultTrailerClient{trailerErr: vcs.ErrNativeResultTrailerCommentUnsupported}
+	pull := testdata.Pull
+	pull.BaseRepo = testdata.GithubRepo
+	ctx := &command.Context{
+		Pull: pull,
+		Log:  logging.NewNoopLogger(t).WithHistory(),
+	}
+	updater := &PullUpdater{
+		NativeResultCommentMarkersEnabled: true,
+		VCSClient:                         client,
+		MarkdownRenderer:                  NewMarkdownRenderer(false, false, false, false, false, false, "", "atlantis", false, false),
+	}
+
+	updater.updatePull(ctx, &CommentCommand{Name: command.Apply}, command.Result{Error: errors.New("boom")})
+
+	Equals(t, 1, client.trailerCalls)
+	Equals(t, 1, client.createCalls)
+	Equals(t, true, strings.Contains(client.createdComment, nativeResultCommentMarkerPrefix))
+}
+
+func TestPullUpdaterDoesNotRetryAfterTrailerCommentFailure(t *testing.T) {
+	client := &recordingNativeResultTrailerClient{trailerErr: errors.New("api error")}
+	pull := testdata.Pull
+	pull.BaseRepo = testdata.GithubRepo
+	ctx := &command.Context{
+		Pull: pull,
+		Log:  logging.NewNoopLogger(t).WithHistory(),
+	}
+	updater := &PullUpdater{
+		NativeResultCommentMarkersEnabled: true,
+		VCSClient:                         client,
+		MarkdownRenderer:                  NewMarkdownRenderer(false, false, false, false, false, false, "", "atlantis", false, false),
+	}
+
+	updater.updatePull(ctx, &CommentCommand{Name: command.Apply}, command.Result{Error: errors.New("boom")})
+
+	Equals(t, 1, client.trailerCalls)
+	Equals(t, 0, client.createCalls)
+}
+
 func decodeNativeResultCommentMarkerForTest(t *testing.T, comment string) nativeResultCommentMarkerPayload {
 	t.Helper()
 	_, encoded, ok := strings.Cut(comment, nativeResultCommentMarkerPrefix)
@@ -429,4 +524,21 @@ func (c *recordingNativeResultCommentClient) UpsertNativeResultComment(_ logging
 	c.upsertCommand = command
 	c.upsertMarker = marker
 	return c.upsertErr
+}
+
+type recordingNativeResultTrailerClient struct {
+	recordingNativeResultCommentClient
+	trailerErr     error
+	trailerCalls   int
+	trailerComment string
+	trailerCommand string
+	trailerMarker  string
+}
+
+func (c *recordingNativeResultTrailerClient) CreateCommentWithNativeResultTrailer(_ logging.SimpleLogging, _ models.Repo, _ int, comment string, command string, marker string) error {
+	c.trailerCalls++
+	c.trailerComment = comment
+	c.trailerCommand = command
+	c.trailerMarker = marker
+	return c.trailerErr
 }

@@ -76,34 +76,40 @@ func encodeNativeResultCommentMarker(ctx *command.Context, cmd PullCommand, resu
 	if result.HasErrors() {
 		payload.Outcome = "error"
 	}
-	for _, projectResult := range result.ProjectResults {
-		payload.Projects = append(payload.Projects, nativeResultCommentMarkerProject{
-			Dir:         projectResult.RepoRelDir,
-			Workspace:   projectResult.Workspace,
-			ProjectName: projectResult.ProjectName,
-			Outcome:     nativeResultCommentMarkerProjectOutcome(projectResult),
-		})
-		if projectResult.IsSuccessful() {
-			continue
+	// Apply markers carry only the identity envelope: per-project apply
+	// outcomes have no marker consumers, and a fleet-sized project list makes
+	// the marker exceed VCS comment limits. Per-project apply data belongs in
+	// structured run results.
+	if cmd.CommandName() != command.Apply {
+		for _, projectResult := range result.ProjectResults {
+			payload.Projects = append(payload.Projects, nativeResultCommentMarkerProject{
+				Dir:         projectResult.RepoRelDir,
+				Workspace:   projectResult.Workspace,
+				ProjectName: projectResult.ProjectName,
+				Outcome:     nativeResultCommentMarkerProjectOutcome(projectResult),
+			})
+			if projectResult.IsSuccessful() {
+				continue
+			}
+			failure := nativeResultCommentMarkerFailure{
+				Dir:         projectResult.RepoRelDir,
+				Workspace:   projectResult.Workspace,
+				ProjectName: projectResult.ProjectName,
+				Reason:      "failure",
+			}
+			if projectResult.Error != nil {
+				failure.Reason = "error"
+			}
+			if projectResult.ProjectRunResult != nil &&
+				projectResult.ProjectRunResult.Diagnostic != nil {
+				failure.Reason = string(projectResult.ProjectRunResult.Diagnostic.Code)
+			}
+			if projectResult.FailureReason != "" {
+				failure.Reason = string(projectResult.FailureReason)
+				failure.BlockingPullNum = projectResult.BlockingPullNum
+			}
+			payload.Failures = append(payload.Failures, failure)
 		}
-		failure := nativeResultCommentMarkerFailure{
-			Dir:         projectResult.RepoRelDir,
-			Workspace:   projectResult.Workspace,
-			ProjectName: projectResult.ProjectName,
-			Reason:      "failure",
-		}
-		if projectResult.Error != nil {
-			failure.Reason = "error"
-		}
-		if projectResult.ProjectRunResult != nil &&
-			projectResult.ProjectRunResult.Diagnostic != nil {
-			failure.Reason = string(projectResult.ProjectRunResult.Diagnostic.Code)
-		}
-		if projectResult.FailureReason != "" {
-			failure.Reason = string(projectResult.FailureReason)
-			failure.BlockingPullNum = projectResult.BlockingPullNum
-		}
-		payload.Failures = append(payload.Failures, failure)
 	}
 
 	switch c := cmd.(type) {

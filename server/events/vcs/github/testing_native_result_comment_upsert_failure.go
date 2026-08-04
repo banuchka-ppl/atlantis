@@ -28,6 +28,7 @@ var errPPLXTestingNativeResultCommentUpsertFailure = errors.New("pplx testing fa
 type testingNativeResultCommentUpsertClient interface {
 	vcs.Client
 	vcs.NativeResultCommentUpserter
+	vcs.NativeResultTrailerCommenter
 }
 
 type testingNativeResultCommentUpsertFailureTarget struct {

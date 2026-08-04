@@ -108,6 +108,10 @@ func newRecordingNativeResultCommentUpsertClient() *recordingNativeResultComment
 	}
 }
 
+func (c *recordingNativeResultCommentUpsertClient) CreateCommentWithNativeResultTrailer(_ logging.SimpleLogging, _ models.Repo, _ int, _ string, _ string, _ string) error {
+	return nil
+}
+
 func (c *recordingNativeResultCommentUpsertClient) UpsertNativeResultComment(_ logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
 	c.upsertCalls = append(c.upsertCalls, nativeResultCommentUpsertCall{
 		repo:    repo.FullName,
