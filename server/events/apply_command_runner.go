@@ -34,6 +34,7 @@ func NewApplyCommandRunner(
 	pullReqStatusFetcher vcs.PullReqStatusFetcher,
 	livePullHeadFetcher LivePullHeadFetcher,
 	disableAutomergeLabel string,
+	commandFinalizer *CommandFinalizer,
 ) *ApplyCommandRunner {
 	return &ApplyCommandRunner{
 		vcsClient:                  vcsClient,
@@ -54,6 +55,7 @@ func NewApplyCommandRunner(
 		pullReqStatusFetcher:       pullReqStatusFetcher,
 		livePullHeadFetcher:        livePullHeadFetcher,
 		disableAutomergeLabel:      disableAutomergeLabel,
+		commandFinalizer:           commandFinalizer,
 	}
 }
 
@@ -74,6 +76,7 @@ type ApplyCommandRunner struct {
 	pullReqStatusFetcher  vcs.PullReqStatusFetcher
 	livePullHeadFetcher   LivePullHeadFetcher
 	disableAutomergeLabel string
+	commandFinalizer      *CommandFinalizer
 	// SilenceNoProjects is whether Atlantis should respond to PRs if no projects
 	// are found
 	SilenceNoProjects bool
@@ -84,6 +87,9 @@ type ApplyCommandRunner struct {
 }
 
 func (a *ApplyCommandRunner) Run(ctx *command.Context, cmd *CommentCommand) {
+	if a.commandFinalizer != nil {
+		a.commandFinalizer.Begin(ctx, cmd)
+	}
 	var err error
 	baseRepo := ctx.Pull.BaseRepo
 	pull := ctx.Pull
@@ -137,7 +143,7 @@ func (a *ApplyCommandRunner) Run(ctx *command.Context, cmd *CommentCommand) {
 			if statusErr := a.commitStatusUpdater.UpdateCombined(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull, models.FailedCommitStatus, cmd.CommandName()); statusErr != nil {
 				ctx.Log.Warn("unable to update commit status: %s", statusErr)
 			}
-			a.pullUpdater.updatePull(ctx, cmd, command.Result{Error: err})
+			a.publishAndFinalize(ctx, cmd, command.Result{Error: err})
 			return
 		}
 		defer unlockPullApply()
@@ -149,7 +155,7 @@ func (a *ApplyCommandRunner) Run(ctx *command.Context, cmd *CommentCommand) {
 		if statusErr := a.commitStatusUpdater.UpdateCombined(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull, models.FailedCommitStatus, cmd.CommandName()); statusErr != nil {
 			ctx.Log.Warn("unable to update commit status: %s", statusErr)
 		}
-		a.pullUpdater.updatePull(ctx, cmd, command.Result{Error: fmt.Errorf("fetching current plan status: %w", err)})
+		a.publishAndFinalize(ctx, cmd, command.Result{Error: fmt.Errorf("fetching current plan status: %w", err)})
 		return
 	}
 	livePull, err := a.refreshLivePullIdentity(ctx)
@@ -159,7 +165,7 @@ func (a *ApplyCommandRunner) Run(ctx *command.Context, cmd *CommentCommand) {
 		if statusErr := a.commitStatusUpdater.UpdateCombined(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull, models.FailedCommitStatus, cmd.CommandName()); statusErr != nil {
 			ctx.Log.Warn("unable to update commit status: %s", statusErr)
 		}
-		a.pullUpdater.updatePull(ctx, cmd, command.Result{Error: fmt.Errorf("fetching live pull request: %w", err)})
+		a.publishAndFinalize(ctx, cmd, command.Result{Error: fmt.Errorf("fetching live pull request: %w", err)})
 		return
 	}
 	if livePull.HeadCommit != "" && !cmd.IsForSpecificProject() {
@@ -191,7 +197,7 @@ func (a *ApplyCommandRunner) Run(ctx *command.Context, cmd *CommentCommand) {
 		if statusErr := a.commitStatusUpdater.UpdateCombined(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull, models.FailedCommitStatus, cmd.CommandName()); statusErr != nil {
 			ctx.Log.Warn("unable to update commit status: %s", statusErr)
 		}
-		a.pullUpdater.updatePull(ctx, cmd, command.Result{Error: projectCmdsErr})
+		a.publishAndFinalize(ctx, cmd, command.Result{Error: projectCmdsErr})
 		return
 	}
 
@@ -237,7 +243,7 @@ func (a *ApplyCommandRunner) Run(ctx *command.Context, cmd *CommentCommand) {
 		if statusErr := a.commitStatusUpdater.UpdateCombined(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull, models.FailedCommitStatus, cmd.CommandName()); statusErr != nil {
 			ctx.Log.Warn("unable to update commit status: %s", statusErr)
 		}
-		a.pullUpdater.updatePull(ctx, cmd, result)
+		a.publishAndFinalize(ctx, cmd, result)
 		return
 	}
 	if err := livePullIdentityChangedDuringApply(livePull, finalLivePull); err != nil {
@@ -248,13 +254,13 @@ func (a *ApplyCommandRunner) Run(ctx *command.Context, cmd *CommentCommand) {
 		if statusErr := a.commitStatusUpdater.UpdateCombined(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull, models.FailedCommitStatus, cmd.CommandName()); statusErr != nil {
 			ctx.Log.Warn("unable to update commit status: %s", statusErr)
 		}
-		a.pullUpdater.updatePull(ctx, cmd, result)
+		a.publishAndFinalize(ctx, cmd, result)
 		return
 	}
 	livePull = finalLivePull
 	ctx.CommandHasErrors = result.HasErrors()
 
-	a.pullUpdater.updatePull(
+	a.publishAndFinalize(
 		ctx,
 		cmd,
 		result)
@@ -299,6 +305,13 @@ func (a *ApplyCommandRunner) Run(ctx *command.Context, cmd *CommentCommand) {
 			}
 		}
 		a.autoMerger.automerge(ctx, pullStatus, a.autoMerger.deleteSourceBranchOnMergeEnabled(projectCmds), cmd.AutoMergeMethod)
+	}
+}
+
+func (a *ApplyCommandRunner) publishAndFinalize(ctx *command.Context, cmd PullCommand, result command.Result) {
+	publication := a.pullUpdater.updatePull(ctx, cmd, result)
+	if a.commandFinalizer != nil {
+		a.commandFinalizer.Finalize(ctx, cmd, result, publication)
 	}
 }
 

@@ -134,6 +134,18 @@ func TestNewServer_RejectsUnknownStructuredRunResultMode(t *testing.T) {
 	)
 }
 
+func TestNewServer_RejectsIncompleteCommandCompletionShadowConfig(t *testing.T) {
+	_, err := server.NewServer(
+		server.UserConfig{
+			PPLXCommandCompletionMode:  "shadow",
+			PPLXCommandCompletionRepos: "ppl-ai/agi",
+		},
+		server.Config{},
+	)
+
+	ErrEquals(t, "command completion Unix socket path must be absolute and clean", err)
+}
+
 func TestNewServer_RejectsUnknownStructuredApplyResultMode(t *testing.T) {
 	_, err := server.NewServer(
 		server.UserConfig{PPLXStructuredApplyResultsMode: "unknown"},

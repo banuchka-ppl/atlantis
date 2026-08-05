@@ -122,6 +122,10 @@ var testFlags = map[string]any{
 	ParallelPlanFlag:                 true,
 	ParallelApplyFlag:                true,
 	PendingApplyStatusFlag:           false,
+	PPLXCommandCompletionMode:        "shadow",
+	PPLXCommandCompletionRepos:       "ppl-ai/agi",
+	PPLXCommandCompletionSocketPath:  "/var/run/atlantis/completions.sock",
+	PPLXCommandCompletionTokenFile:   "/var/run/secrets/atlantis/completions-token",
 	PPLXNativeResultCommentMarkers:   false,
 	PPLXNativeResultCommentUpsert:    false,
 	PPLXStructuredApplyResultsMode:   "prefer",
@@ -649,6 +653,21 @@ func TestExecute_ValidatePPLXStructuredRunResultsMode(t *testing.T) {
 	ErrEquals(
 		t,
 		`invalid --pplx-structured-run-results-mode: invalid structured run result mode "unknown": must be one of [off shadow prefer required]`,
+		err,
+	)
+}
+
+func TestExecute_ValidatePPLXCommandCompletionConfig(t *testing.T) {
+	c := setupWithDefaults(map[string]any{
+		PPLXCommandCompletionMode:  "shadow",
+		PPLXCommandCompletionRepos: "ppl-ai/agi",
+	}, t)
+
+	err := c.Execute()
+
+	ErrEquals(
+		t,
+		"invalid command completion configuration: command completion Unix socket path must be absolute and clean",
 		err,
 	)
 }

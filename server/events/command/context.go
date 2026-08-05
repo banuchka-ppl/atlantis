@@ -4,6 +4,8 @@
 package command
 
 import (
+	"time"
+
 	"github.com/runatlantis/atlantis/server/events/models"
 	"github.com/runatlantis/atlantis/server/logging"
 	tally "github.com/uber-go/tally/v4"
@@ -23,6 +25,12 @@ const (
 // Context represents the context of a command that should be executed
 // for a pull request.
 type Context struct {
+	// CommandRunID is an Atlantis-owned identity shared by every project in a
+	// plan or apply command and by its terminal completion event.
+	CommandRunID string
+	// CommandStartedAt records when the command-wide identity was allocated.
+	CommandStartedAt time.Time
+
 	// HeadRepo is the repository that is getting merged into the BaseRepo.
 	// If the pull request branch is from the same repository then HeadRepo will
 	// be the same as BaseRepo.

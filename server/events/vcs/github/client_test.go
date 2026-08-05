@@ -18,6 +18,7 @@ import (
 
 	"github.com/runatlantis/atlantis/server/events/command"
 	"github.com/runatlantis/atlantis/server/events/models"
+	"github.com/runatlantis/atlantis/server/events/vcs"
 	"github.com/runatlantis/atlantis/server/events/vcs/github"
 	"github.com/runatlantis/atlantis/server/logging"
 	. "github.com/runatlantis/atlantis/testing"
@@ -1526,6 +1527,8 @@ func TestClient_SplitComments(t *testing.T) {
 					return
 				}
 				githubComments = append(githubComments, requestBody)
+				w.WriteHeader(http.StatusCreated)
+				fmt.Fprintf(w, `{"id":%d}`, len(githubComments))
 				return
 			default:
 				t.Errorf("got unexpected request at %q", r.RequestURI)
@@ -1595,6 +1598,8 @@ func TestClient_CreateCommentWithNativeResultTrailer(t *testing.T) {
 					return
 				}
 				githubComments = append(githubComments, requestBody)
+				w.WriteHeader(http.StatusCreated)
+				fmt.Fprintf(w, `{"id":%d}`, len(githubComments))
 				return
 			default:
 				t.Errorf("got unexpected request at %q", r.RequestURI)
@@ -1633,29 +1638,132 @@ func TestClient_CreateCommentWithNativeResultTrailer(t *testing.T) {
 	}
 
 	// Short comment: marker rides the single comment.
-	err = client.CreateCommentWithNativeResultTrailer(logger, repo, 1, "short apply output", command.Apply.String(), marker)
+	publication, err := client.CreateCommentWithNativeResultTrailer(logger, repo, 1, "short apply output", command.Apply.String(), marker)
 	Ok(t, err)
 	Equals(t, 1, len(githubComments))
 	assertIntactTrailer(t, githubComments)
+	Equals(t, vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentCreated,
+		CommentIDs:              []int64{1},
+		RootCommentID:           1,
+		TerminalCommentID:       1,
+		NativeResultMarkerState: vcs.NativeResultMarkerPublished,
+	}, publication)
 
 	// Oversized comment: split chunks leave room for the trailer and the
 	// marker rides the final chunk intact.
 	githubComments = nil
-	err = client.CreateCommentWithNativeResultTrailer(logger, repo, 1, strings.Repeat("a", 3*65536), command.Apply.String(), marker)
+	publication, err = client.CreateCommentWithNativeResultTrailer(logger, repo, 1, strings.Repeat("a", 3*65536), command.Apply.String(), marker)
 	Ok(t, err)
 	Assert(t, len(githubComments) > 1, "oversized comment should be split, got %d comments", len(githubComments))
 	assertIntactTrailer(t, githubComments)
+	Equals(t, int64(1), publication.RootCommentID)
+	Equals(t, int64(len(githubComments)), publication.TerminalCommentID)
+	Equals(t, len(githubComments), len(publication.CommentIDs))
+	Equals(t, vcs.NativeResultMarkerPublished, publication.NativeResultMarkerState)
 
 	// A marker too large to ride any comment is dropped instead of split.
 	githubComments = nil
 	hugeMarker := "<!-- atlantis-native-result:v2:" + strings.Repeat("h", 65536) + " -->"
-	err = client.CreateCommentWithNativeResultTrailer(logger, repo, 1, strings.Repeat("a", 2*65536), command.Apply.String(), hugeMarker)
+	publication, err = client.CreateCommentWithNativeResultTrailer(logger, repo, 1, strings.Repeat("a", 2*65536), command.Apply.String(), hugeMarker)
 	Ok(t, err)
 	Assert(t, len(githubComments) > 1, "oversized comment should still be split, got %d comments", len(githubComments))
 	for i, comment := range githubComments {
 		Assert(t, len(comment.Body) <= 65536, "comment %d length %d exceeds GitHub limit", i, len(comment.Body))
 		Assert(t, !strings.Contains(comment.Body, "atlantis-native-result"), "comment %d must not contain any marker content", i)
 	}
+	Equals(t, vcs.NativeResultMarkerNotPublished, publication.NativeResultMarkerState)
+	Equals(t, int64(1), publication.RootCommentID)
+	Equals(t, int64(len(githubComments)), publication.TerminalCommentID)
+
+	// Facts-only publication preserves the ordinary comment body and reports
+	// that no marker was requested.
+	githubComments = nil
+	publication, err = client.CreateCommentWithNativeResultTrailer(logger, repo, 1, "facts only", command.Plan.String(), "")
+	Ok(t, err)
+	Equals(t, []githubComment{{Body: "facts only"}}, githubComments)
+	Equals(t, vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentCreated,
+		CommentIDs:              []int64{1},
+		RootCommentID:           1,
+		TerminalCommentID:       1,
+		NativeResultMarkerState: vcs.NativeResultMarkerNotRequested,
+	}, publication)
+}
+
+func TestClient_CreateCommentWithNativeResultTrailerRetainsPartialPublication(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	requestCount := 0
+	testServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v3/repos/owner/repo/issues/1/comments" {
+			t.Errorf("got unexpected request %s %q", r.Method, r.RequestURI)
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		requestCount++
+		if requestCount == 2 {
+			http.Error(w, "retry later", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id":101}`)) // nolint: errcheck
+	}))
+
+	testServerURL, err := url.Parse(testServer.URL)
+	Ok(t, err)
+	client, err := github.New(testServerURL.Host, &github.UserCredentials{"user", "pass", ""}, github.Config{}, 0, logger)
+	Ok(t, err)
+	defer disableSSLVerification()()
+
+	publication, err := client.CreateCommentWithNativeResultTrailer(
+		logger,
+		githubTestRepo(),
+		1,
+		strings.Repeat("a", 2*65536),
+		command.Plan.String(),
+		"<!-- atlantis-native-result:v2:dGVzdA -->",
+	)
+	Assert(t, err != nil, "expected the second split comment to fail")
+	Equals(t, vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentCreated,
+		CommentIDs:              []int64{101},
+		RootCommentID:           101,
+		NativeResultMarkerState: vcs.NativeResultMarkerNotPublished,
+	}, publication)
+}
+
+func TestClient_CreateCommentWithNativeResultTrailerRejectsMissingCommentID(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	testServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v3/repos/owner/repo/issues/1/comments" {
+			t.Errorf("got unexpected request %s %q", r.Method, r.RequestURI)
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{}`)) // nolint: errcheck
+	}))
+
+	testServerURL, err := url.Parse(testServer.URL)
+	Ok(t, err)
+	client, err := github.New(testServerURL.Host, &github.UserCredentials{"user", "pass", ""}, github.Config{}, 0, logger)
+	Ok(t, err)
+	defer disableSSLVerification()()
+
+	publication, err := client.CreateCommentWithNativeResultTrailer(
+		logger,
+		githubTestRepo(),
+		1,
+		"plan result",
+		command.Plan.String(),
+		"<!-- atlantis-native-result:v2:dGVzdA -->",
+	)
+	ErrContains(t, "GitHub create comment response omitted comment ID", err)
+	Equals(t, vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentCreated,
+		CommentIDs:              []int64{},
+		NativeResultMarkerState: vcs.NativeResultMarkerNotPublished,
+	}, publication)
 }
 
 func TestClient_UpsertNativeResultComment_UpdatesExisting(t *testing.T) {
@@ -1695,9 +1803,16 @@ func TestClient_UpsertNativeResultComment_UpdatesExisting(t *testing.T) {
 	Ok(t, err)
 	defer disableSSLVerification()()
 
-	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
+	publication, err := client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
 	Ok(t, err)
 	Equals(t, "new body\n\n"+marker, patchedBody)
+	Equals(t, vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentUpdated,
+		CommentIDs:              []int64{123},
+		RootCommentID:           123,
+		TerminalCommentID:       123,
+		NativeResultMarkerState: vcs.NativeResultMarkerPublished,
+	}, publication)
 }
 
 func TestClient_UpsertNativeResultComment_CreatesWhenMatchIsMinimized(t *testing.T) {
@@ -1738,9 +1853,16 @@ func TestClient_UpsertNativeResultComment_CreatesWhenMatchIsMinimized(t *testing
 	Ok(t, err)
 	defer disableSSLVerification()()
 
-	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
+	publication, err := client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
 	Ok(t, err)
 	Equals(t, "new body\n\n"+marker, createdBody)
+	Equals(t, vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentCreated,
+		CommentIDs:              []int64{456},
+		RootCommentID:           456,
+		TerminalCommentID:       456,
+		NativeResultMarkerState: vcs.NativeResultMarkerPublished,
+	}, publication)
 }
 
 func TestClient_UpsertNativeResultComment_CreatesWhenNoMatch(t *testing.T) {
@@ -1778,9 +1900,16 @@ func TestClient_UpsertNativeResultComment_CreatesWhenNoMatch(t *testing.T) {
 	Ok(t, err)
 	defer disableSSLVerification()()
 
-	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
+	publication, err := client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
 	Ok(t, err)
 	Equals(t, "new body\n\n"+marker, createdBody)
+	Equals(t, vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentCreated,
+		CommentIDs:              []int64{123},
+		RootCommentID:           123,
+		TerminalCommentID:       123,
+		NativeResultMarkerState: vcs.NativeResultMarkerPublished,
+	}, publication)
 }
 
 func TestClient_UpsertNativeResultComment_CreatesWhenMatchPredatesProgressComment(t *testing.T) {
@@ -1821,9 +1950,16 @@ func TestClient_UpsertNativeResultComment_CreatesWhenMatchPredatesProgressCommen
 	Ok(t, err)
 	defer disableSSLVerification()()
 
-	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
+	publication, err := client.UpsertNativeResultComment(logger, githubTestRepo(), 1, "new body", command.Plan.String(), marker)
 	Ok(t, err)
 	Equals(t, "new body\n\n"+marker, createdBody)
+	Equals(t, vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentCreated,
+		CommentIDs:              []int64{789},
+		RootCommentID:           789,
+		TerminalCommentID:       789,
+		NativeResultMarkerState: vcs.NativeResultMarkerPublished,
+	}, publication)
 }
 
 func TestClient_UpsertNativeResultComment_SkipsMarkedUpsertWhenCommentSplits(t *testing.T) {
@@ -1845,7 +1981,7 @@ func TestClient_UpsertNativeResultComment_SkipsMarkedUpsertWhenCommentSplits(t *
 			Ok(t, json.NewDecoder(r.Body).Decode(&requestBody))
 			createdBodies = append(createdBodies, requestBody.Body)
 			w.WriteHeader(http.StatusCreated)
-			w.Write([]byte(`{"id":123}`)) // nolint: errcheck
+			fmt.Fprintf(w, `{"id":%d}`, len(createdBodies))
 		}),
 	)
 
@@ -1855,12 +1991,19 @@ func TestClient_UpsertNativeResultComment_SkipsMarkedUpsertWhenCommentSplits(t *
 	Ok(t, err)
 	defer disableSSLVerification()()
 
-	err = client.UpsertNativeResultComment(logger, githubTestRepo(), 1, strings.Repeat("a", 65537), command.Plan.String(), marker)
+	publication, err := client.UpsertNativeResultComment(logger, githubTestRepo(), 1, strings.Repeat("a", 65537), command.Plan.String(), marker)
 	Ok(t, err)
 	Equals(t, 2, len(createdBodies))
 	for _, body := range createdBodies {
 		Equals(t, false, strings.Contains(body, marker))
 	}
+	Equals(t, vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentCreated,
+		CommentIDs:              []int64{1, 2},
+		RootCommentID:           1,
+		TerminalCommentID:       2,
+		NativeResultMarkerState: vcs.NativeResultMarkerNotPublished,
+	}, publication)
 }
 
 // Test that we retry the get pull request call if it 404s.

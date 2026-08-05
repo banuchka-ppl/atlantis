@@ -19,6 +19,7 @@ import (
 
 	"github.com/runatlantis/atlantis/server"
 	"github.com/runatlantis/atlantis/server/core/runtime"
+	"github.com/runatlantis/atlantis/server/events"
 	"github.com/runatlantis/atlantis/server/events/vcs/bitbucketcloud"
 	"github.com/runatlantis/atlantis/server/i18n"
 	"github.com/runatlantis/atlantis/server/logging"
@@ -121,6 +122,10 @@ const (
 	MaxCommentsPerCommand            = "max-comments-per-command"
 	ParallelPoolSize                 = "parallel-pool-size"
 	PendingApplyStatusFlag           = "pending-apply-status"
+	PPLXCommandCompletionMode        = "pplx-command-completion-mode"
+	PPLXCommandCompletionRepos       = "pplx-command-completion-repo-allowlist"
+	PPLXCommandCompletionSocketPath  = "pplx-command-completion-socket-path"
+	PPLXCommandCompletionTokenFile   = "pplx-command-completion-token-file"
 	PPLXNativeResultCommentMarkers   = "pplx-native-result-comment-markers"
 	PPLXNativeResultCommentUpsert    = "pplx-native-result-comment-upsert"
 	PPLXStructuredRunResultsMode     = "pplx-structured-run-results-mode"
@@ -197,6 +202,7 @@ const (
 	DefaultIgnoreVCSStatusNames         = ""
 	DefaultMaxCommentsPerCommand        = 100
 	DefaultParallelPoolSize             = 15
+	DefaultPPLXCommandCompletionMode    = "off"
 	DefaultPPLXStructuredRunResultsMode = "off"
 	DefaultStatsNamespace               = "atlantis"
 	DefaultPort                         = 4141
@@ -516,6 +522,23 @@ var stringFlags = map[string]stringFlag{
 	LanguageConfigFileFlag: {
 		description: "Optional path to a custom YAML language catalog that overrides built-in localized strings. " +
 			"Supports partial overrides and can be combined with --language.",
+	},
+	PPLXCommandCompletionMode: {
+		description:  "Fork-only command-completion publisher mode. Supported values: off, shadow.",
+		defaultValue: DefaultPPLXCommandCompletionMode,
+		hidden:       true,
+	},
+	PPLXCommandCompletionRepos: {
+		description: "Fork-only comma-separated exact owner/name allowlist for command-completion publication.",
+		hidden:      true,
+	},
+	PPLXCommandCompletionSocketPath: {
+		description: "Fork-only Unix socket path for command-completion publication.",
+		hidden:      true,
+	},
+	PPLXCommandCompletionTokenFile: {
+		description: "Fork-only bearer token file path for command-completion publication.",
+		hidden:      true,
 	},
 	PPLXStructuredRunResultsMode: {
 		description:  "Fork-only rollout mode for structured plan results. Supported values: off, shadow, prefer, required.",
@@ -1056,6 +1079,9 @@ func (s *ServerCmd) setDefaults(c *server.UserConfig, v *viper.Viper) {
 	if c.ParallelPoolSize == 0 {
 		c.ParallelPoolSize = DefaultParallelPoolSize
 	}
+	if c.PPLXCommandCompletionMode == "" {
+		c.PPLXCommandCompletionMode = DefaultPPLXCommandCompletionMode
+	}
 	if c.PPLXStructuredRunResultsMode == "" {
 		c.PPLXStructuredRunResultsMode = DefaultPPLXStructuredRunResultsMode
 	}
@@ -1133,6 +1159,14 @@ func (s *ServerCmd) validate(userConfig server.UserConfig) error {
 
 	if userConfig.AutomergeMethod != "" && !slices.Contains(ValidAutomergeMethods, userConfig.AutomergeMethod) {
 		return fmt.Errorf("invalid --%s: must be one of %v", AutomergeMethodFlag, ValidAutomergeMethods)
+	}
+	if _, err := events.ParseCommandCompletionConfig(
+		userConfig.PPLXCommandCompletionMode,
+		userConfig.PPLXCommandCompletionRepos,
+		userConfig.PPLXCommandCompletionSocketPath,
+		userConfig.PPLXCommandCompletionTokenFile,
+	); err != nil {
+		return fmt.Errorf("invalid command completion configuration: %w", err)
 	}
 	if _, err := runtime.ParseStructuredRunResultMode(userConfig.PPLXStructuredRunResultsMode); err != nil {
 		return fmt.Errorf("invalid --%s: %w", PPLXStructuredRunResultsMode, err)

@@ -1260,6 +1260,63 @@ ATLANTIS_PORT=4141
 
 Port to bind to. Defaults to `4141`.
 
+### `--pplx-command-completion-mode`
+
+```bash
+atlantis server --pplx-command-completion-mode=shadow
+# or
+ATLANTIS_PPLX_COMMAND_COMPLETION_MODE=shadow
+```
+
+Fork-only hidden option that controls publication of typed, command-wide plan
+and apply completion events. Supported values are `off` and `shadow`; the
+default is `off`. Off mode does not allocate command identifiers, start a
+publisher worker, or access the configured socket and token paths.
+
+Shadow mode publishes only for repositories listed by
+`--pplx-command-completion-repo-allowlist`. Delivery is best-effort and does not
+change command execution or VCS-comment outcomes.
+
+### `--pplx-command-completion-repo-allowlist`
+
+```bash
+atlantis server --pplx-command-completion-repo-allowlist='ppl-ai/agi'
+# or
+ATLANTIS_PPLX_COMMAND_COMPLETION_REPO_ALLOWLIST='ppl-ai/agi'
+```
+
+Fork-only hidden option containing comma-separated exact `owner/name`
+repositories eligible for command-completion publication. Globs are not
+accepted. Shadow mode requires a non-empty allowlist; the default is empty.
+
+### `--pplx-command-completion-socket-path`
+
+```bash
+atlantis server --pplx-command-completion-socket-path=/run/atlantis-command-completion/server.sock
+# or
+ATLANTIS_PPLX_COMMAND_COMPLETION_SOCKET_PATH=/run/atlantis-command-completion/server.sock
+```
+
+Fork-only hidden option containing the absolute Unix socket path for the local
+command-completion consumer. It is required only in shadow mode. Atlantis sends
+authenticated `POST /v1/command-completions` requests through this socket and
+uses the command run ID as the idempotency key. A missing socket is treated as a
+retryable delivery failure and does not prevent startup.
+
+### `--pplx-command-completion-token-file`
+
+```bash
+atlantis server --pplx-command-completion-token-file=/run/atlantis-command-completion/token
+# or
+ATLANTIS_PPLX_COMMAND_COMPLETION_TOKEN_FILE=/run/atlantis-command-completion/token
+```
+
+Fork-only hidden option containing the absolute path to the per-pod bearer
+token used for command-completion delivery. It is required only in shadow mode.
+The path must resolve directly to a regular file of at most 4 KiB that is not
+accessible by group or other users; symlinks are rejected. A missing or unsafe
+token is a retryable delivery failure and does not prevent startup.
+
 ### `--pplx-native-result-comment-markers`
 
 ```bash
