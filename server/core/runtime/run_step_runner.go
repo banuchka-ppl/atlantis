@@ -21,6 +21,11 @@ import (
 	"github.com/runatlantis/atlantis/server/jobs"
 )
 
+// WithheldApplyOutputNotice replaces raw authoritative apply output in every
+// comment-bound field. The live stream remains available on the Atlantis job
+// console and in the workflow's own protected logs.
+const WithheldApplyOutputNotice = "Terraform apply output is available in the Atlantis job console and is withheld from comments."
+
 // RunStepRunner runs custom commands.
 type RunStepRunner struct {
 	TerraformExecutor     TerraformExec
@@ -209,7 +214,24 @@ func (r *RunStepRunner) runWithResult(
 		}
 	}
 
-	result := RunStepOutput{ConsoleOutput: output}
+	// Authoritative apply output is an untrusted Terraform/provider stream
+	// (stderr merged in) that downstream fallbacks render verbatim into PR
+	// comments: ReviewerError falls back to the raw error when no typed
+	// diagnostic exists, and a prefer-mode success without a typed result
+	// renders collected step output through the apply success templates.
+	// In-band fencing cannot protect those paths because the stream can forge
+	// any delimiter, so the comment-bound copies never receive the stream at
+	// all. The live jobs-console stream above and the workflow's own
+	// protected logs are unaffected.
+	commentOutput := output
+	if structuredResult != nil &&
+		ctx.CommandName.String() == "apply" &&
+		(structuredResult.mode == StructuredRunResultModePrefer ||
+			structuredResult.mode == StructuredRunResultModeRequired) {
+		commentOutput = WithheldApplyOutputNotice
+	}
+
+	result := RunStepOutput{ConsoleOutput: commentOutput}
 	if structuredResult != nil {
 		completed, structuredResultErr := r.completeStructuredRunResult(
 			ctx,
@@ -230,7 +252,7 @@ func (r *RunStepRunner) runWithResult(
 	if err != nil {
 		err = runStepError{
 			err:          err,
-			output:       output,
+			output:       commentOutput,
 			streamOutput: streamOutput,
 		}
 		if !ctx.CustomPolicyCheck {
@@ -244,12 +266,12 @@ func (r *RunStepRunner) runWithResult(
 	for _, processOutput := range postProcessOutput {
 		switch processOutput {
 		case valid.PostProcessRunOutputHide:
-			output = ""
+			commentOutput = ""
 		default:
 		}
 	}
 
-	result.ConsoleOutput = output
+	result.ConsoleOutput = commentOutput
 	return result, nil
 }
 

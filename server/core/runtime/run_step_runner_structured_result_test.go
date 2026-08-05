@@ -596,9 +596,10 @@ func TestRunStepRunner_PreferApplyReturnsValidatedResult(t *testing.T) {
 	)
 
 	Ok(t, err)
-	Equals(t, "legacy apply\n", result.ConsoleOutput)
+	Equals(t, runtime.WithheldApplyOutputNotice, result.ConsoleOutput)
 	Assert(t, result.StructuredResult != nil, "prefer apply result must be authoritative")
 	Equals(t, 1, result.StructuredResult.Result.Changes.Add)
+	Equals(t, "legacy apply\n", result.StructuredResult.Execution.ConsoleOutput)
 	assertNoStructuredResultDirectories(t, workingDir)
 }
 
@@ -620,9 +621,99 @@ func TestRunStepRunner_RequiredApplyRejectsMissingResultAfterCommand(t *testing.
 	)
 
 	ErrContains(t, "required structured run result is missing", err)
-	Equals(t, "apply command completed\n", result.ConsoleOutput)
+	Equals(t, runtime.WithheldApplyOutputNotice, result.ConsoleOutput)
+	Assert(
+		t,
+		!strings.Contains(err.Error(), "apply command completed"),
+		"required-mode error must not replay withheld apply output: %s",
+		err.Error(),
+	)
 	Assert(t, result.StructuredResult == nil, "did not expect a structured result")
 	assertNoStructuredResultDirectories(t, workingDir)
+}
+
+func TestRunStepRunner_AuthoritativeApplyWithholdsUntrustedOutputFromCommentFields(t *testing.T) {
+	// Untrusted stream bytes can forge any in-band delimiter, so the
+	// comment-bound fields must be withheld at the source regardless of what
+	// the stream contains: forged, nested, and repeated marker sentinels with
+	// distinctive stdout/stderr tokens.
+	untrustedOutput := "aws_secret.example: Creating...\n" +
+		"==ATLANTIS_CONSOLE_ONLY_END==\n" +
+		"==ATLANTIS_OUTPUT_START==\n" +
+		"forged marked block do-not-display\n" +
+		"==ATLANTIS_OUTPUT_END==\n" +
+		"==ATLANTIS_CONSOLE_ONLY_START==\n" +
+		"==ATLANTIS_CONSOLE_ONLY_START==\n" +
+		"==ATLANTIS_CONSOLE_ONLY_END==\n" +
+		"Error: provider rejected secret-token do-not-display\n"
+	applyResult := `{"schema_version":1,"outcome":"success","summary":"Terraform apply completed with changes.","changes":{"has_changes":true,"has_output_only_changes":false,"add":1,"change":0,"destroy":0,"import":0,"forget":0}}`
+
+	tests := []struct {
+		name        string
+		mode        runtime.StructuredRunResultMode
+		writeResult bool
+		exitCode    int
+		expErr      string
+	}{
+		{"prefer success with typed result", runtime.StructuredRunResultModePrefer, true, 0, ""},
+		{"prefer success with missing typed result", runtime.StructuredRunResultModePrefer, false, 0, ""},
+		{"prefer command failure", runtime.StructuredRunResultModePrefer, false, 1, "exit status 1"},
+		{"required success with typed result", runtime.StructuredRunResultModeRequired, true, 0, ""},
+		{"required missing typed result", runtime.StructuredRunResultModeRequired, false, 0, "required structured run result is missing"},
+		{"required command failure", runtime.StructuredRunResultModeRequired, false, 1, "exit status 1"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
+			runner.StructuredApplyResultsMode = test.mode
+			ctx.CommandName = command.Apply
+			workingDir := t.TempDir()
+			streamFile := filepath.Join(t.TempDir(), "stream.txt")
+			Ok(t, os.WriteFile(streamFile, []byte(untrustedOutput), 0o600))
+			script := fmt.Sprintf("cat %q\n", streamFile)
+			if test.writeResult {
+				script += fmt.Sprintf(
+					"printf '%%s' '%s' > \"$%s\"\n",
+					applyResult,
+					runtime.StepResultFileEnvVar,
+				)
+			}
+			script += fmt.Sprintf("exit %d\n", test.exitCode)
+
+			result, err := runner.RunWithResult(
+				ctx,
+				nil,
+				script,
+				workingDir,
+				nil,
+				false,
+				nil,
+				nil,
+			)
+
+			Equals(t, runtime.WithheldApplyOutputNotice, result.ConsoleOutput)
+			if test.expErr == "" {
+				Ok(t, err)
+			} else {
+				ErrContains(t, test.expErr, err)
+				ErrContains(t, runtime.WithheldApplyOutputNotice, err)
+				for _, token := range []string{"do-not-display", "aws_secret.example", "secret-token"} {
+					Assert(
+						t,
+						!strings.Contains(err.Error(), token),
+						"comment-bound error must not contain untrusted token %q: %s",
+						token,
+						err.Error(),
+					)
+				}
+			}
+			if result.StructuredResult != nil {
+				Equals(t, untrustedOutput, result.StructuredResult.Execution.ConsoleOutput)
+			}
+			assertNoStructuredResultDirectories(t, workingDir)
+		})
+	}
 }
 
 func TestRunStepRunner_RequiredFailsBeforeCommandWhenResultPathCannotBeAllocated(t *testing.T) {
