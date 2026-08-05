@@ -21,6 +21,7 @@ import (
 	"github.com/google/go-github/v88/github"
 	"github.com/runatlantis/atlantis/server/events/command"
 	"github.com/runatlantis/atlantis/server/events/models"
+	"github.com/runatlantis/atlantis/server/events/vcs"
 	"github.com/runatlantis/atlantis/server/events/vcs/common"
 	"github.com/runatlantis/atlantis/server/logging"
 	"github.com/shurcooL/githubv4"
@@ -234,69 +235,134 @@ func (g *Client) CreateComment(logger logging.SimpleLogging, repo models.Repo, p
 	logger.Debug("Creating comment on GitHub pull request %d", pullNum)
 
 	comments := common.SplitComment(logger, comment, maxCommentLength, g.maxCommentsPerCommand, command)
-	return g.postComments(logger, repo, pullNum, comments)
+	_, err := g.postComments(logger, repo, pullNum, comments, false)
+	return err
 }
 
-func (g *Client) postComments(logger logging.SimpleLogging, repo models.Repo, pullNum int, comments []string) error {
+func (g *Client) postComments(
+	logger logging.SimpleLogging,
+	repo models.Repo,
+	pullNum int,
+	comments []string,
+	requireCommentIDs bool,
+) ([]int64, error) {
+	commentIDs := make([]int64, 0, len(comments))
 	for i := range comments {
-		_, resp, err := g.client.Issues.CreateComment(g.ctx, repo.Owner, repo.Name, pullNum, &github.IssueComment{Body: &comments[i]})
+		created, resp, err := g.client.Issues.CreateComment(g.ctx, repo.Owner, repo.Name, pullNum, &github.IssueComment{Body: &comments[i]})
 		if resp != nil {
 			logger.Debug("POST /repos/%v/%v/issues/%d/comments returned: %v", repo.Owner, repo.Name, pullNum, resp.StatusCode)
 		}
 		if err != nil {
-			return err
+			return commentIDs, err
+		}
+		commentID := created.GetID()
+		if commentID <= 0 && requireCommentIDs {
+			return commentIDs, errors.New("GitHub create comment response omitted comment ID")
+		}
+		if commentID > 0 {
+			commentIDs = append(commentIDs, commentID)
 		}
 	}
-	return nil
+	return commentIDs, nil
 }
 
 // CreateCommentWithNativeResultTrailer creates a comment carrying a native
 // result marker trailer. The marker always rides intact on the final comment:
 // when the comment must be split, chunks are sized to leave room for the
 // trailer so splitting can never slice the marker apart.
-func (g *Client) CreateCommentWithNativeResultTrailer(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+func (g *Client) CreateCommentWithNativeResultTrailer(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) (vcs.NativeResultCommentPublication, error) {
 	logger.Debug("Creating comment with native result trailer on GitHub pull request %d", pullNum)
+	if marker == "" {
+		comments := common.SplitComment(logger, comment, maxCommentLength, g.maxCommentsPerCommand, command)
+		publication, err := g.createNativeResultComments(logger, repo, pullNum, comments, false)
+		publication.NativeResultMarkerState = vcs.NativeResultMarkerNotRequested
+		return publication, err
+	}
 
 	trailer := "\n\n" + marker
 	marked := strings.TrimRight(comment, "\n") + trailer
 	if len(marked) <= maxCommentLength {
-		return g.postComments(logger, repo, pullNum, []string{marked})
+		return g.createNativeResultComments(logger, repo, pullNum, []string{marked}, true)
 	}
 
 	chunkSize := maxCommentLength - len(trailer)
 	if chunkSize < minNativeResultTrailerChunkSize {
 		logger.Err("native result marker length %d leaves no room for comment content; posting comment without marker", len(marker))
-		return g.CreateComment(logger, repo, pullNum, comment, command)
+		comments := common.SplitComment(logger, comment, maxCommentLength, g.maxCommentsPerCommand, command)
+		return g.createNativeResultComments(logger, repo, pullNum, comments, false)
 	}
 
 	comments := common.SplitComment(logger, comment, chunkSize, g.maxCommentsPerCommand, command)
 	comments[len(comments)-1] = strings.TrimRight(comments[len(comments)-1], "\n") + trailer
-	return g.postComments(logger, repo, pullNum, comments)
+	return g.createNativeResultComments(logger, repo, pullNum, comments, true)
 }
 
-func (g *Client) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+func (g *Client) createNativeResultComments(
+	logger logging.SimpleLogging,
+	repo models.Repo,
+	pullNum int,
+	comments []string,
+	markerOnTerminal bool,
+) (vcs.NativeResultCommentPublication, error) {
+	commentIDs, err := g.postComments(logger, repo, pullNum, comments, true)
+	publication := vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentCreated,
+		CommentIDs:              commentIDs,
+		NativeResultMarkerState: vcs.NativeResultMarkerNotPublished,
+	}
+	if len(commentIDs) > 0 {
+		publication.RootCommentID = commentIDs[0]
+	}
+	if err != nil {
+		return publication, err
+	}
+	if len(commentIDs) == 0 {
+		return publication, errors.New("GitHub create comment response omitted comment ID")
+	}
+	publication.TerminalCommentID = commentIDs[len(commentIDs)-1]
+	if markerOnTerminal {
+		publication.NativeResultMarkerState = vcs.NativeResultMarkerPublished
+	}
+	return publication, nil
+}
+
+func (g *Client) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) (vcs.NativeResultCommentPublication, error) {
 	logger.Debug("Upserting native result comment on GitHub pull request %d", pullNum)
 
 	markedComment := strings.TrimRight(comment, "\n") + "\n\n" + marker
 	comments := common.SplitComment(logger, markedComment, maxCommentLength, g.maxCommentsPerCommand, command)
 	if len(comments) != 1 || comments[0] != markedComment {
 		logger.Debug("native result comment upsert skipped because comment would be split or truncated")
-		return g.CreateComment(logger, repo, pullNum, comment, command)
+		comments = common.SplitComment(logger, comment, maxCommentLength, g.maxCommentsPerCommand, command)
+		return g.createNativeResultComments(logger, repo, pullNum, comments, false)
 	}
 
 	existingComment, err := g.FindNativeResultComment(logger, repo, pullNum, marker)
 	if err != nil {
-		return err
+		return vcs.NativeResultCommentPublication{}, err
 	}
 	if existingComment == nil {
-		return g.CreateComment(logger, repo, pullNum, markedComment, command)
+		return g.createNativeResultComments(logger, repo, pullNum, []string{markedComment}, true)
 	}
 
-	_, resp, err := g.client.Issues.EditComment(g.ctx, repo.Owner, repo.Name, existingComment.GetID(), &github.IssueComment{Body: &markedComment})
+	edited, resp, err := g.client.Issues.EditComment(g.ctx, repo.Owner, repo.Name, existingComment.GetID(), &github.IssueComment{Body: &markedComment})
 	if resp != nil {
 		logger.Debug("PATCH /repos/%v/%v/issues/comments/%d returned: %v", repo.Owner, repo.Name, existingComment.GetID(), resp.StatusCode)
 	}
-	return err
+	if err != nil {
+		return vcs.NativeResultCommentPublication{}, err
+	}
+	commentID := edited.GetID()
+	if commentID <= 0 {
+		return vcs.NativeResultCommentPublication{}, errors.New("GitHub edit comment response omitted comment ID")
+	}
+	return vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentUpdated,
+		CommentIDs:              []int64{commentID},
+		RootCommentID:           commentID,
+		TerminalCommentID:       commentID,
+		NativeResultMarkerState: vcs.NativeResultMarkerPublished,
+	}, nil
 }
 
 func (g *Client) FindNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, marker string) (*github.IssueComment, error) {

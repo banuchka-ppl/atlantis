@@ -147,6 +147,63 @@ func TestApplyCommandRunner_DeferredApplySuccessPublishesAfterFinalFreshness(t *
 	}
 }
 
+func TestApplyCommandRunnerPublishesTypedCompletionAtAggregatePublicationSeam(t *testing.T) {
+	database, err := boltdb.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	pull := models.PullRequest{
+		BaseRepo:   testdata.GithubRepo,
+		State:      models.OpenPullState,
+		Num:        testdata.Pull.Num,
+		HeadCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		BaseBranch: "main",
+	}
+	_, err = database.UpdatePullWithResults(pull, []command.ProjectResult{internalPlannedProjectResult("dirA", DefaultWorkspace, "projA")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectRunner := &recordingDeferredApplyRunner{output: command.ProjectCommandOutput{
+		ApplySuccess: "applied",
+		ProjectRunResult: &models.ProjectRunResult{
+			Outcome: models.ProjectRunOutcomeSuccess,
+			Changes: &models.ProjectRunChangeSummary{Change: 1, HasChanges: true},
+		},
+	}}
+	runner := newInternalApplyCommandRunner(t, database, staticApplyCommandBuilder{commands: []command.ProjectContext{fromPlannedApplyProject(pull)}}, projectRunner, &sequenceApplyIdentityFetcher{identities: []models.PullRequest{pull, pull}})
+	publisher := &InMemoryCommandCompletionPublisher{}
+	if err := publisher.Start(); err != nil {
+		t.Fatal(err)
+	}
+	runner.commandFinalizer = NewCommandFinalizer(publisher, []string{testdata.GithubRepo.FullName})
+	ctx := newInternalApplyContext(t, pull)
+
+	runner.Run(ctx, &CommentCommand{Name: command.Apply, ProjectName: "projA"})
+
+	if ctx.CommandHasErrors {
+		t.Fatal("expected command-completion delivery to leave successful apply execution unchanged")
+	}
+	completions := publisher.Events()
+	if len(completions) != 1 {
+		t.Fatalf("expected one command completion, got %d", len(completions))
+	}
+	if completions[0].Command.Name != command.Apply.String() || completions[0].Execution.Outcome != "success" {
+		t.Fatalf("unexpected apply completion: %#v", completions[0])
+	}
+}
+
+func fromPlannedApplyProject(pull models.PullRequest) command.ProjectContext {
+	return command.ProjectContext{
+		CommandName:       command.Apply,
+		RepoRelDir:        "dirA",
+		Workspace:         DefaultWorkspace,
+		ProjectName:       "projA",
+		ProjectPlanStatus: models.PlannedPlanStatus,
+		Pull:              pull,
+	}
+}
+
 func TestApplyCommandRunner_DeferredApplySuccessFailsWhenFinalFreshnessFails(t *testing.T) {
 	database, err := boltdb.New(t.TempDir())
 	if err != nil {
@@ -219,6 +276,7 @@ func newInternalApplyCommandRunner(t *testing.T, database *boltdb.BoltDB, builde
 		noopPullReqStatusFetcher{},
 		liveFetcher,
 		"",
+		nil,
 	)
 }
 
@@ -291,6 +349,7 @@ func TestApplyCommandRunner_StaleCommandResultWithEmptyPullStatusDoesNotPublishZ
 		noopPullReqStatusFetcher{},
 		nil,
 		"",
+		nil,
 	)
 	pull := models.PullRequest{
 		BaseRepo:   testdata.GithubRepo,
@@ -364,6 +423,7 @@ func TestApplyCommandRunner_NoPlanLegacyEmptyIdentityDoesNotPublishZeroZeroSucce
 		noopPullReqStatusFetcher{},
 		nil,
 		"",
+		nil,
 	)
 	pull := models.PullRequest{
 		BaseRepo:   testdata.GithubRepo,
@@ -436,6 +496,7 @@ func TestApplyCommandRunner_SilencedNoProjectLegacyEmptyIdentityDoesNotPublishZe
 		noopPullReqStatusFetcher{},
 		nil,
 		"",
+		nil,
 	)
 	pull := models.PullRequest{
 		BaseRepo:   testdata.GithubRepo,

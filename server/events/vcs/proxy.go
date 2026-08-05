@@ -56,18 +56,18 @@ func (d *ClientProxy) CreateComment(logger logging.SimpleLogging, repo models.Re
 	return d.clients[repo.VCSHost.Type].CreateComment(logger, repo, pullNum, comment, command)
 }
 
-func (d *ClientProxy) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+func (d *ClientProxy) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) (NativeResultCommentPublication, error) {
 	upserter, ok := d.clients[repo.VCSHost.Type].(NativeResultCommentUpserter)
 	if !ok {
-		return ErrNativeResultCommentUpsertUnsupported
+		return NativeResultCommentPublication{}, ErrNativeResultCommentUpsertUnsupported
 	}
 	return upserter.UpsertNativeResultComment(logger, repo, pullNum, comment, command, marker)
 }
 
-func (d *ClientProxy) CreateCommentWithNativeResultTrailer(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+func (d *ClientProxy) CreateCommentWithNativeResultTrailer(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) (NativeResultCommentPublication, error) {
 	commenter, ok := d.clients[repo.VCSHost.Type].(NativeResultTrailerCommenter)
 	if !ok {
-		return ErrNativeResultTrailerCommentUnsupported
+		return NativeResultCommentPublication{}, ErrNativeResultTrailerCommentUnsupported
 	}
 	return commenter.CreateCommentWithNativeResultTrailer(logger, repo, pullNum, comment, command, marker)
 }

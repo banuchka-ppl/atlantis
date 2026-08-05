@@ -49,6 +49,7 @@ func NewPlanCommandRunner(
 	discardApprovalOnPlan bool,
 	pullReqStatusFetcher vcs.PullReqStatusFetcher,
 	PendingApplyStatus bool,
+	commandFinalizer *CommandFinalizer,
 
 ) *PlanCommandRunner {
 	return &PlanCommandRunner{
@@ -73,6 +74,7 @@ func NewPlanCommandRunner(
 		DiscardApprovalOnPlan:      discardApprovalOnPlan,
 		pullReqStatusFetcher:       pullReqStatusFetcher,
 		PendingApplyStatus:         PendingApplyStatus,
+		commandFinalizer:           commandFinalizer,
 	}
 }
 
@@ -107,6 +109,7 @@ type PlanCommandRunner struct {
 	pullReqStatusFetcher  vcs.PullReqStatusFetcher
 	SilencePRComments     []string
 	PendingApplyStatus    bool
+	commandFinalizer      *CommandFinalizer
 }
 
 func (p *PlanCommandRunner) runAutoplan(ctx *command.Context) {
@@ -133,7 +136,7 @@ func (p *PlanCommandRunner) runAutoplan(ctx *command.Context) {
 		if statusErr := p.commitStatusUpdater.UpdateCombined(ctx.Log, baseRepo, pull, models.FailedCommitStatus, command.Plan); statusErr != nil {
 			ctx.Log.Warn("unable to update commit status: %s", statusErr)
 		}
-		p.pullUpdater.updatePull(ctx, AutoplanCommand{}, command.Result{Error: err})
+		p.publishAndFinalize(ctx, AutoplanCommand{}, command.Result{Error: err})
 		return
 	}
 
@@ -173,7 +176,7 @@ func (p *PlanCommandRunner) runAutoplan(ctx *command.Context) {
 		if statusErr := p.commitStatusUpdater.UpdateCombined(ctx.Log, baseRepo, pull, models.FailedCommitStatus, command.Plan); statusErr != nil {
 			ctx.Log.Warn("unable to update commit status: %s", statusErr)
 		}
-		p.pullUpdater.updatePull(ctx, AutoplanCommand{}, command.Result{Error: err})
+		p.publishAndFinalize(ctx, AutoplanCommand{}, command.Result{Error: err})
 		return
 	}
 
@@ -187,7 +190,7 @@ func (p *PlanCommandRunner) runAutoplan(ctx *command.Context) {
 		result.PlansDeleted = true
 	}
 
-	p.pullUpdater.updatePull(ctx, AutoplanCommand{}, result)
+	p.publishAndFinalize(ctx, AutoplanCommand{}, result)
 
 	pullStatus, err := p.dbUpdater.updateDB(ctx, ctx.Pull, result.ProjectResults)
 	if err != nil {
@@ -247,7 +250,7 @@ func (p *PlanCommandRunner) run(ctx *command.Context, cmd *CommentCommand) {
 		if statusErr := p.commitStatusUpdater.UpdateCombined(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull, models.FailedCommitStatus, command.Plan); statusErr != nil {
 			ctx.Log.Warn("unable to update commit status: %s", statusErr)
 		}
-		p.pullUpdater.updatePull(ctx, cmd, command.Result{Error: err})
+		p.publishAndFinalize(ctx, cmd, command.Result{Error: err})
 		return
 	}
 
@@ -318,7 +321,7 @@ func (p *PlanCommandRunner) run(ctx *command.Context, cmd *CommentCommand) {
 			if statusErr := p.commitStatusUpdater.UpdateCombined(ctx.Log, baseRepo, pull, models.FailedCommitStatus, command.Plan); statusErr != nil {
 				ctx.Log.Warn("unable to update commit status: %s", statusErr)
 			}
-			p.pullUpdater.updatePull(ctx, cmd, command.Result{Error: err})
+			p.publishAndFinalize(ctx, cmd, command.Result{Error: err})
 			return
 		}
 	}
@@ -334,7 +337,7 @@ func (p *PlanCommandRunner) run(ctx *command.Context, cmd *CommentCommand) {
 		result.PlansDeleted = true
 	}
 
-	p.pullUpdater.updatePull(
+	p.publishAndFinalize(
 		ctx,
 		cmd,
 		result)
@@ -374,9 +377,22 @@ func (p *PlanCommandRunner) run(ctx *command.Context, cmd *CommentCommand) {
 
 func (p *PlanCommandRunner) Run(ctx *command.Context, cmd *CommentCommand) {
 	if ctx.Trigger == command.AutoTrigger {
+		if p.commandFinalizer != nil {
+			p.commandFinalizer.Begin(ctx, AutoplanCommand{})
+		}
 		p.runAutoplan(ctx)
 	} else {
+		if p.commandFinalizer != nil {
+			p.commandFinalizer.Begin(ctx, cmd)
+		}
 		p.run(ctx, cmd)
+	}
+}
+
+func (p *PlanCommandRunner) publishAndFinalize(ctx *command.Context, cmd PullCommand, result command.Result) {
+	publication := p.pullUpdater.updatePull(ctx, cmd, result)
+	if p.commandFinalizer != nil {
+		p.commandFinalizer.Finalize(ctx, cmd, result, publication)
 	}
 }
 
@@ -408,7 +424,7 @@ func (p *PlanCommandRunner) handleNoProjectPlanStateError(ctx *command.Context, 
 	if statusErr := p.commitStatusUpdater.UpdateCombined(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull, models.FailedCommitStatus, command.Plan); statusErr != nil {
 		ctx.Log.Warn("unable to update commit status: %s", statusErr)
 	}
-	p.pullUpdater.updatePull(ctx, cmd, command.Result{Error: err})
+	p.publishAndFinalize(ctx, cmd, command.Result{Error: err})
 }
 
 func (p *PlanCommandRunner) ShouldSkipPreWorkflowHooks(ctx *command.Context, cmd *CommentCommand) bool {

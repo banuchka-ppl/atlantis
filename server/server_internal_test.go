@@ -5,6 +5,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"testing/synctest"
@@ -12,10 +13,13 @@ import (
 
 	"github.com/runatlantis/atlantis/server/core/db"
 	"github.com/runatlantis/atlantis/server/core/db/mocks"
+	"github.com/runatlantis/atlantis/server/events"
 	"github.com/runatlantis/atlantis/server/logging"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 )
+
+const commandCompletionStartFailure = "publisher unavailable"
 
 func TestServer_CloseDatabase(t *testing.T) {
 
@@ -89,5 +93,27 @@ func TestServer_CloseDatabase(t *testing.T) {
 				time.Sleep(2 * time.Second)
 			})
 		})
+	}
+}
+
+type failingCommandCompletionPublisher struct{}
+
+func (failingCommandCompletionPublisher) Start() error {
+	return errors.New(commandCompletionStartFailure)
+}
+
+func (failingCommandCompletionPublisher) Publish(events.CommandCompletionV1) events.CommandCompletionPublishOutcome {
+	return events.CommandCompletionPublishClosed
+}
+
+func (failingCommandCompletionPublisher) Shutdown(context.Context) error { return nil }
+
+func TestServerStartsCommandCompletionPublisherBeforeServingTraffic(t *testing.T) {
+	server := &Server{CommandCompletionPublisher: failingCommandCompletionPublisher{}}
+
+	err := server.Start()
+
+	if err == nil || err.Error() != "starting command completion publisher: "+commandCompletionStartFailure {
+		t.Fatalf("expected publisher startup failure before route setup, got %v", err)
 	}
 }

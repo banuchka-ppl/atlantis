@@ -61,7 +61,7 @@ func (c *InstrumentedClient) CreateComment(logger logging.SimpleLogging, repo mo
 	return nil
 }
 
-func (c *InstrumentedClient) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+func (c *InstrumentedClient) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) (vcs.NativeResultCommentPublication, error) {
 	scope := c.StatsScope.SubScope("upsert_native_result_comment")
 	scope = SetGitScopeTags(scope, repo.FullName, pullNum)
 
@@ -74,20 +74,21 @@ func (c *InstrumentedClient) UpsertNativeResultComment(logger logging.SimpleLogg
 	upserter, ok := c.Client.(vcs.NativeResultCommentUpserter)
 	if !ok {
 		executionError.Inc(1)
-		return vcs.ErrNativeResultCommentUpsertUnsupported
+		return vcs.NativeResultCommentPublication{}, vcs.ErrNativeResultCommentUpsertUnsupported
 	}
 
-	if err := upserter.UpsertNativeResultComment(logger, repo, pullNum, comment, command, marker); err != nil {
+	publication, err := upserter.UpsertNativeResultComment(logger, repo, pullNum, comment, command, marker)
+	if err != nil {
 		executionError.Inc(1)
 		logger.Err("Unable to upsert native result comment for command %s, error: %s", command, err.Error())
-		return err
+		return publication, err
 	}
 
 	executionSuccess.Inc(1)
-	return nil
+	return publication, nil
 }
 
-func (c *InstrumentedClient) CreateCommentWithNativeResultTrailer(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+func (c *InstrumentedClient) CreateCommentWithNativeResultTrailer(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) (vcs.NativeResultCommentPublication, error) {
 	scope := c.StatsScope.SubScope("create_comment_with_native_result_trailer")
 	scope = SetGitScopeTags(scope, repo.FullName, pullNum)
 
@@ -100,17 +101,18 @@ func (c *InstrumentedClient) CreateCommentWithNativeResultTrailer(logger logging
 	commenter, ok := c.Client.(vcs.NativeResultTrailerCommenter)
 	if !ok {
 		executionError.Inc(1)
-		return vcs.ErrNativeResultTrailerCommentUnsupported
+		return vcs.NativeResultCommentPublication{}, vcs.ErrNativeResultTrailerCommentUnsupported
 	}
 
-	if err := commenter.CreateCommentWithNativeResultTrailer(logger, repo, pullNum, comment, command, marker); err != nil {
+	publication, err := commenter.CreateCommentWithNativeResultTrailer(logger, repo, pullNum, comment, command, marker)
+	if err != nil {
 		executionError.Inc(1)
 		logger.Err("Unable to create comment with native result trailer for command %s, error: %s", command, err.Error())
-		return err
+		return publication, err
 	}
 
 	executionSuccess.Inc(1)
-	return nil
+	return publication, nil
 }
 
 func (c *InstrumentedClient) ReactToComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, commentID int64, reaction string) error {

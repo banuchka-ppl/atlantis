@@ -85,7 +85,8 @@ const (
 	BinDirName = "bin"
 	// terraformPluginCacheDir is the name of the dir inside our data dir
 	// where we tell terraform to cache plugins and modules.
-	TerraformPluginCacheDirName = "plugin-cache"
+	TerraformPluginCacheDirName      = "plugin-cache"
+	commandCompletionShutdownTimeout = 10 * time.Second
 )
 
 // Server runs the Atlantis web server.
@@ -97,6 +98,7 @@ type Server struct {
 	PostWorkflowHooksCommandRunner *events.DefaultPostWorkflowHooksCommandRunner
 	PreWorkflowHooksCommandRunner  *events.DefaultPreWorkflowHooksCommandRunner
 	CommandRunner                  *events.DefaultCommandRunner
+	CommandCompletionPublisher     events.CommandCompletionPublisher
 	Logger                         logging.SimpleLogging
 	StatsScope                     tally.Scope
 	StatsReporter                  tally.BaseStatsReporter
@@ -172,6 +174,15 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	if userConfig.EnableDriftRemediation && !userConfig.EnableDriftDetection {
 		return nil, errors.New("--enable-drift-remediation requires --enable-drift-detection")
 	}
+	commandCompletionConfig, err := events.ParseCommandCompletionConfig(
+		userConfig.PPLXCommandCompletionMode,
+		userConfig.PPLXCommandCompletionRepos,
+		userConfig.PPLXCommandCompletionSocketPath,
+		userConfig.PPLXCommandCompletionTokenFile,
+	)
+	if err != nil {
+		return nil, err
+	}
 	structuredRunResultsMode, err := runtime.ParseStructuredRunResultMode(userConfig.PPLXStructuredRunResultsMode)
 	if err != nil {
 		return nil, err
@@ -246,6 +257,25 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("instantiating metrics scope: %w", err)
 	}
+
+	var commandCompletionPublisher events.CommandCompletionPublisher = events.DisabledCommandCompletionPublisher{}
+	if commandCompletionConfig.Mode == events.CommandCompletionModeShadow {
+		commandCompletionPublisher, err = events.NewUDSCommandCompletionPublisher(
+			events.UDSCommandCompletionPublisherConfig{
+				SocketPath:    commandCompletionConfig.SocketPath,
+				TokenFilePath: commandCompletionConfig.TokenFilePath,
+				Logger:        logger,
+				Scope:         statsScope.SubScope("pplx.command_completion"),
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("initializing command completion publisher: %w", err)
+		}
+	}
+	commandFinalizer := events.NewCommandFinalizer(
+		commandCompletionPublisher,
+		commandCompletionConfig.RepositoryAllowlist,
+	)
 
 	if userConfig.GithubUser != "" || userConfig.GithubAppID != 0 {
 		if userConfig.GithubAllowMergeableBypassApply {
@@ -827,6 +857,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		HidePrevPlanComments:              userConfig.HidePrevPlanComments,
 		NativeResultCommentMarkersEnabled: userConfig.PPLXNativeResultCommentMarkers,
 		NativeResultCommentUpsertEnabled:  userConfig.PPLXNativeResultCommentUpsert,
+		ResultPublicationFactsEnabled:     commandCompletionConfig.Mode == events.CommandCompletionModeShadow,
 		VCSClient:                         vcsClient,
 		MarkdownRenderer:                  markdownRenderer,
 	}
@@ -880,6 +911,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		userConfig.DiscardApprovalOnPlanFlag,
 		pullReqStatusFetcher,
 		userConfig.PendingApplyStatus,
+		commandFinalizer,
 	)
 
 	applyCommandRunner := events.NewApplyCommandRunner(
@@ -901,6 +933,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		pullReqStatusFetcher,
 		livePullHeadFetcher,
 		userConfig.DisableAutomergeLabel,
+		commandFinalizer,
 	)
 
 	approvePoliciesCommandRunner := events.NewApprovePoliciesCommandRunner(
@@ -1131,6 +1164,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		PostWorkflowHooksCommandRunner: postWorkflowHooksCommandRunner,
 		PreWorkflowHooksCommandRunner:  preWorkflowHooksCommandRunner,
 		CommandRunner:                  commandRunner,
+		CommandCompletionPublisher:     commandCompletionPublisher,
 		Logger:                         logger,
 		StatsScope:                     statsScope,
 		StatsReporter:                  statsReporter,
@@ -1221,6 +1255,11 @@ func (s *Server) SetupRoutes() {
 
 // Start creates the routes and starts serving traffic.
 func (s *Server) Start() error {
+	if s.CommandCompletionPublisher != nil {
+		if err := s.CommandCompletionPublisher.Start(); err != nil {
+			return fmt.Errorf("starting command completion publisher: %w", err)
+		}
+	}
 	s.SetupRoutes()
 
 	n := negroni.New(&negroni.Recovery{
@@ -1265,6 +1304,14 @@ func (s *Server) Start() error {
 
 	s.Logger.Warn("Received interrupt. Waiting for in-progress operations to complete")
 	s.waitForDrain()
+
+	if s.CommandCompletionPublisher != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), commandCompletionShutdownTimeout)
+		if err := s.CommandCompletionPublisher.Shutdown(ctx); err != nil {
+			s.Logger.Err("while shutting down command completion publisher: %v", err)
+		}
+		cancel()
+	}
 
 	// flush stats before shutdown
 	if err := s.StatsCloser.Close(); err != nil {

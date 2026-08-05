@@ -1618,6 +1618,7 @@ func setupE2E(t *testing.T, repoDir string, opt setupOption) (events_controllers
 		discardApprovalOnPlan,
 		e2ePullReqStatusFetcher,
 		false,
+		nil,
 	)
 
 	applyCommandRunner := events.NewApplyCommandRunner(
@@ -1639,6 +1640,7 @@ func setupE2E(t *testing.T, repoDir string, opt setupOption) (events_controllers
 		e2ePullReqStatusFetcher,
 		nil,
 		disableAutomergeLabel,
+		nil,
 	)
 
 	approvePoliciesCommandRunner := events.NewApprovePoliciesCommandRunner(

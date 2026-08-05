@@ -82,6 +82,7 @@ type TestConfig struct {
 	applyLockCheckerErr        error
 	workingDirLocker           events.WorkingDirLocker
 	livePullHeadFetcher        events.LivePullHeadFetcher
+	commandFinalizer           *events.CommandFinalizer
 }
 
 type configuredPreWorkflowHooksCommandRunner struct {
@@ -199,6 +200,7 @@ func setup(t *testing.T, options ...func(testConfig *TestConfig)) *vcsmocks.Mock
 		testConfig.discardApprovalOnPlan,
 		pullReqStatusFetcher,
 		testConfig.PendingApplyStatus,
+		testConfig.commandFinalizer,
 	)
 
 	applyCommandRunner = events.NewApplyCommandRunner(
@@ -220,6 +222,7 @@ func setup(t *testing.T, options ...func(testConfig *TestConfig)) *vcsmocks.Mock
 		pullReqStatusFetcher,
 		testConfig.livePullHeadFetcher,
 		testConfig.DisableAutomergeLabel,
+		testConfig.commandFinalizer,
 	)
 
 	approvePoliciesCommandRunner = events.NewApprovePoliciesCommandRunner(
@@ -317,6 +320,50 @@ func TestRunCommentCommand_LogPanics(t *testing.T) {
 	_, _, _, comment, _ := vcsClient.VerifyWasCalledOnce().CreateComment(
 		Any[logging.SimpleLogging](), Any[models.Repo](), Any[int](), Any[string](), Any[string]()).GetCapturedArguments()
 	Assert(t, strings.Contains(comment, "Error: goroutine panic"), fmt.Sprintf("comment should be about a goroutine panic but was %q", comment))
+}
+
+func TestPlanCommandRunnerPublishesCompletionAfterVCSFailureWithoutChangingExecution(t *testing.T) {
+	publisher := &events.InMemoryCommandCompletionPublisher{}
+	Ok(t, publisher.Start())
+	finalizer := events.NewCommandFinalizer(publisher, []string{testdata.GithubRepo.FullName})
+	vcsClient := setup(t, func(config *TestConfig) {
+		config.commandFinalizer = finalizer
+	})
+	pull := testdata.Pull
+	pull.BaseRepo = testdata.GithubRepo
+	ctx := &command.Context{
+		Pull:     pull,
+		HeadRepo: testdata.GithubRepo,
+		Trigger:  command.CommentTrigger,
+		Log:      logging.NewNoopLogger(t).WithHistory(),
+	}
+	cmd := &events.CommentCommand{Name: command.Plan}
+	projectCtx := command.ProjectContext{
+		CommandName: command.Plan,
+		BaseRepo:    testdata.GithubRepo,
+		Pull:        pull,
+		RepoRelDir:  "infra/example",
+		Workspace:   "default",
+		ProjectName: "example",
+	}
+	When(pullReqStatusFetcher.FetchPullStatus(Any[logging.SimpleLogging](), Eq(pull))).ThenReturn(models.PullReqStatus{}, nil)
+	When(projectCommandBuilder.BuildPlanCommands(ctx, cmd)).ThenReturn([]command.ProjectContext{projectCtx}, nil)
+	When(projectCommandRunner.Plan(projectCtx)).ThenReturn(command.ProjectCommandOutput{
+		PlanSuccess: &models.PlanSuccess{},
+		ProjectRunResult: &models.ProjectRunResult{
+			Outcome: models.ProjectRunOutcomeSuccess,
+			Changes: &models.ProjectRunChangeSummary{},
+		},
+	})
+	When(vcsClient.CreateComment(Any[logging.SimpleLogging](), Eq(testdata.GithubRepo), Eq(pull.Num), Any[string](), Eq(command.Plan.String()))).ThenReturn(errors.New("GitHub unavailable"))
+
+	planCommandRunner.Run(ctx, cmd)
+
+	Equals(t, false, ctx.CommandHasErrors)
+	completions := publisher.Events()
+	Equals(t, 1, len(completions))
+	Equals(t, "success", completions[0].Execution.Outcome)
+	Equals(t, events.VCSResultPublicationFailed, completions[0].VCSPublication.State)
 }
 
 func TestRunCommentCommand_GithubPullErr(t *testing.T) {
@@ -1897,6 +1944,7 @@ func installPlanCommandRunnerLocker(vcsClient *vcsmocks.MockClient, locker locki
 		false,
 		pullReqStatusFetcher,
 		false,
+		nil,
 	)
 	ch.CommentCommandRunnerByCmd[command.Plan] = planCommandRunner
 }

@@ -92,7 +92,7 @@ func parseTestingNativeResultCommentUpsertFailureTarget(targetSpec string) (test
 	}, nil
 }
 
-func (c *testingNativeResultCommentUpsertFailureClient) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+func (c *testingNativeResultCommentUpsertFailureClient) UpsertNativeResultComment(logger logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) (vcs.NativeResultCommentPublication, error) {
 	if repo.FullName != c.target.repo || pullNum != c.target.pullNum || command != c.target.command {
 		return c.testingNativeResultCommentUpsertClient.UpsertNativeResultComment(logger, repo, pullNum, comment, command, marker)
 	}
@@ -101,5 +101,5 @@ func (c *testingNativeResultCommentUpsertFailureClient) UpsertNativeResultCommen
 	}
 
 	logger.Warn("injecting one-shot testing native result comment upsert failure for repository %q pull request %d command %q", repo.FullName, pullNum, command)
-	return errPPLXTestingNativeResultCommentUpsertFailure
+	return vcs.NativeResultCommentPublication{}, errPPLXTestingNativeResultCommentUpsertFailure
 }

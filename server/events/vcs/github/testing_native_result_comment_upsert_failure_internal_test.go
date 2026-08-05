@@ -20,7 +20,7 @@ func TestTestingNativeResultCommentUpsertFailureClientDisabled(t *testing.T) {
 	client, err := newTestingNativeResultCommentUpsertFailureClient(delegate, "")
 	Ok(t, err)
 
-	err = client.UpsertNativeResultComment(logging.NewNoopLogger(t), models.Repo{FullName: "ppl-ai/agi"}, 123, "comment", "plan", "marker")
+	_, err = client.UpsertNativeResultComment(logging.NewNoopLogger(t), models.Repo{FullName: "ppl-ai/agi"}, 123, "comment", "plan", "marker")
 	Ok(t, err)
 	Equals(t, []nativeResultCommentUpsertCall{{
 		repo:    "ppl-ai/agi",
@@ -47,7 +47,7 @@ func TestTestingNativeResultCommentUpsertFailureClientMatchesExactlyOnce(t *test
 		{repo: "ppl-ai/agi", pullNum: 123, command: "apply"},
 	}
 	for _, selector := range wrongSelectors {
-		err = client.UpsertNativeResultComment(logger, models.Repo{FullName: selector.repo}, selector.pullNum, "comment", selector.command, "marker")
+		_, err = client.UpsertNativeResultComment(logger, models.Repo{FullName: selector.repo}, selector.pullNum, "comment", selector.command, "marker")
 		Ok(t, err)
 	}
 	Equals(t, []nativeResultCommentUpsertCall{
@@ -56,11 +56,11 @@ func TestTestingNativeResultCommentUpsertFailureClientMatchesExactlyOnce(t *test
 		{repo: "ppl-ai/agi", pullNum: 123, comment: "comment", command: "apply", marker: "marker"},
 	}, delegate.upsertCalls)
 
-	err = client.UpsertNativeResultComment(logger, models.Repo{FullName: "ppl-ai/agi"}, 123, "first", "plan", "first-marker")
+	_, err = client.UpsertNativeResultComment(logger, models.Repo{FullName: "ppl-ai/agi"}, 123, "first", "plan", "first-marker")
 	Assert(t, errors.Is(err, errPPLXTestingNativeResultCommentUpsertFailure), "expected one-shot injected failure, got %v", err)
 	Equals(t, len(wrongSelectors), len(delegate.upsertCalls))
 
-	err = client.UpsertNativeResultComment(logger, models.Repo{FullName: "ppl-ai/agi"}, 123, "second", "plan", "second-marker")
+	_, err = client.UpsertNativeResultComment(logger, models.Repo{FullName: "ppl-ai/agi"}, 123, "second", "plan", "second-marker")
 	Ok(t, err)
 	Equals(t, nativeResultCommentUpsertCall{
 		repo:    "ppl-ai/agi",
@@ -108,11 +108,11 @@ func newRecordingNativeResultCommentUpsertClient() *recordingNativeResultComment
 	}
 }
 
-func (c *recordingNativeResultCommentUpsertClient) CreateCommentWithNativeResultTrailer(_ logging.SimpleLogging, _ models.Repo, _ int, _ string, _ string, _ string) error {
-	return nil
+func (c *recordingNativeResultCommentUpsertClient) CreateCommentWithNativeResultTrailer(_ logging.SimpleLogging, _ models.Repo, _ int, _ string, _ string, _ string) (vcs.NativeResultCommentPublication, error) {
+	return vcs.NativeResultCommentPublication{}, nil
 }
 
-func (c *recordingNativeResultCommentUpsertClient) UpsertNativeResultComment(_ logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) error {
+func (c *recordingNativeResultCommentUpsertClient) UpsertNativeResultComment(_ logging.SimpleLogging, repo models.Repo, pullNum int, comment string, command string, marker string) (vcs.NativeResultCommentPublication, error) {
 	c.upsertCalls = append(c.upsertCalls, nativeResultCommentUpsertCall{
 		repo:    repo.FullName,
 		pullNum: pullNum,
@@ -120,5 +120,5 @@ func (c *recordingNativeResultCommentUpsertClient) UpsertNativeResultComment(_ l
 		command: command,
 		marker:  marker,
 	})
-	return nil
+	return vcs.NativeResultCommentPublication{}, nil
 }

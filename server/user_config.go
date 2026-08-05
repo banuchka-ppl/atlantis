@@ -98,6 +98,10 @@ type UserConfig struct {
 	ParallelPlan                    bool   `mapstructure:"parallel-plan"`
 	ParallelApply                   bool   `mapstructure:"parallel-apply"`
 	PendingApplyStatus              bool   `mapstructure:"pending-apply-status"`
+	PPLXCommandCompletionMode       string `mapstructure:"pplx-command-completion-mode"`
+	PPLXCommandCompletionRepos      string `mapstructure:"pplx-command-completion-repo-allowlist"`
+	PPLXCommandCompletionSocketPath string `mapstructure:"pplx-command-completion-socket-path"`
+	PPLXCommandCompletionTokenFile  string `mapstructure:"pplx-command-completion-token-file"`
 	PPLXNativeResultCommentMarkers  bool   `mapstructure:"pplx-native-result-comment-markers"`
 	PPLXNativeResultCommentUpsert   bool   `mapstructure:"pplx-native-result-comment-upsert"`
 	PPLXStructuredRunResultsMode    string `mapstructure:"pplx-structured-run-results-mode"`

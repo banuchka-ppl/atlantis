@@ -444,6 +444,39 @@ func TestPullUpdaterRoutesNativeResultMarkerThroughTrailerCommenter(t *testing.T
 	Equals(t, "apply", payload.Command)
 }
 
+func TestPullUpdaterCapturesPublicationFactsWithoutRequestingMarker(t *testing.T) {
+	client := &recordingNativeResultTrailerClient{}
+	pull := testdata.Pull
+	pull.BaseRepo = testdata.GithubRepo
+	ctx := &command.Context{
+		Pull: pull,
+		Log:  logging.NewNoopLogger(t).WithHistory(),
+	}
+	updater := &PullUpdater{
+		ResultPublicationFactsEnabled: true,
+		VCSClient:                     client,
+		MarkdownRenderer:              NewMarkdownRenderer(false, false, false, false, false, false, "", "atlantis", false, false),
+	}
+
+	publication := updater.updatePull(
+		ctx,
+		&CommentCommand{Name: command.Apply},
+		command.Result{Error: errors.New("boom")},
+	)
+
+	Equals(t, 1, client.trailerCalls)
+	Equals(t, 0, client.createCalls)
+	Equals(t, "", client.trailerMarker)
+	Equals(t, VCSResultPublication{
+		State:                   VCSResultPublicationSucceeded,
+		Action:                  VCSResultPublicationCreated,
+		CommentIDs:              []int64{102},
+		RootCommentID:           102,
+		TerminalCommentID:       102,
+		NativeResultMarkerState: NativeResultMarkerNotRequested,
+	}, publication)
+}
+
 func TestPullUpdaterFallsBackToMarkedCreateCommentWhenTrailerUnsupported(t *testing.T) {
 	client := &recordingNativeResultTrailerClient{trailerErr: vcs.ErrNativeResultTrailerCommentUnsupported}
 	pull := testdata.Pull
@@ -518,12 +551,21 @@ func (c *recordingNativeResultCommentClient) CreateComment(_ logging.SimpleLoggi
 	return nil
 }
 
-func (c *recordingNativeResultCommentClient) UpsertNativeResultComment(_ logging.SimpleLogging, _ models.Repo, _ int, comment string, command string, marker string) error {
+func (c *recordingNativeResultCommentClient) UpsertNativeResultComment(_ logging.SimpleLogging, _ models.Repo, _ int, comment string, command string, marker string) (vcs.NativeResultCommentPublication, error) {
 	c.upsertCalls++
 	c.upsertComment = comment
 	c.upsertCommand = command
 	c.upsertMarker = marker
-	return c.upsertErr
+	if c.upsertErr != nil {
+		return vcs.NativeResultCommentPublication{}, c.upsertErr
+	}
+	return vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentUpdated,
+		CommentIDs:              []int64{101},
+		RootCommentID:           101,
+		TerminalCommentID:       101,
+		NativeResultMarkerState: vcs.NativeResultMarkerPublished,
+	}, nil
 }
 
 type recordingNativeResultTrailerClient struct {
@@ -535,10 +577,23 @@ type recordingNativeResultTrailerClient struct {
 	trailerMarker  string
 }
 
-func (c *recordingNativeResultTrailerClient) CreateCommentWithNativeResultTrailer(_ logging.SimpleLogging, _ models.Repo, _ int, comment string, command string, marker string) error {
+func (c *recordingNativeResultTrailerClient) CreateCommentWithNativeResultTrailer(_ logging.SimpleLogging, _ models.Repo, _ int, comment string, command string, marker string) (vcs.NativeResultCommentPublication, error) {
 	c.trailerCalls++
 	c.trailerComment = comment
 	c.trailerCommand = command
 	c.trailerMarker = marker
-	return c.trailerErr
+	if c.trailerErr != nil {
+		return vcs.NativeResultCommentPublication{}, c.trailerErr
+	}
+	markerState := vcs.NativeResultMarkerPublished
+	if marker == "" {
+		markerState = vcs.NativeResultMarkerNotRequested
+	}
+	return vcs.NativeResultCommentPublication{
+		Action:                  vcs.NativeResultCommentCreated,
+		CommentIDs:              []int64{102},
+		RootCommentID:           102,
+		TerminalCommentID:       102,
+		NativeResultMarkerState: markerState,
+	}, nil
 }
