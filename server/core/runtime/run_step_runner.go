@@ -230,8 +230,6 @@ func (r *RunStepRunner) runWithResult(
 	if err != nil {
 		err = runStepError{
 			err:          err,
-			command:      command,
-			path:         path,
 			output:       output,
 			streamOutput: streamOutput,
 		}
@@ -376,16 +374,17 @@ func (r *RunStepRunner) completeStructuredRunResult(
 	return &completed, nil
 }
 
+// runStepError wraps a run-step failure with the step's captured output. The
+// wrapped error already identifies the shell, a bounded command summary, the
+// working directory, and the exit status, so the command is not repeated here.
 type runStepError struct {
 	err          error
-	command      string
-	path         string
 	output       string
 	streamOutput bool
 }
 
 func (e runStepError) Error() string {
-	return fmt.Sprintf("%s: running %q in %q: \n%s", e.err, e.command, e.path, e.output)
+	return fmt.Sprintf("%s: \n%s", e.err, e.output)
 }
 
 func (e runStepError) JobMessage() string {
