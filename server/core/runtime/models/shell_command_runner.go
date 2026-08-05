@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/runatlantis/atlantis/server/core/config/valid"
 	"github.com/runatlantis/atlantis/server/core/terraform/ansi"
@@ -21,6 +22,31 @@ import (
 
 // Setting the buffer size to 10mb
 const BufioScannerBufferSize = 10 * 1024 * 1024
+
+// commandSummaryMaxLen bounds how much of a command is echoed into errors and
+// operational logs. Multi-line workflow scripts would otherwise be dumped in
+// full into run-step failures that reach the job page and PR comments.
+const commandSummaryMaxLen = 120
+
+// commandSummary returns a single-line, byte-bounded prefix of command. The
+// full command is still logged at debug level when the command starts.
+func commandSummary(command string) string {
+	summary := command
+	if newline := strings.IndexByte(summary, '\n'); newline >= 0 {
+		summary = summary[:newline]
+	}
+	if len(summary) > commandSummaryMaxLen {
+		cut := commandSummaryMaxLen
+		for cut > 0 && !utf8.RuneStart(summary[cut]) {
+			cut--
+		}
+		summary = summary[:cut]
+	}
+	if len(summary) < len(command) {
+		return summary + "…"
+	}
+	return summary
+}
 
 // Line represents a line that was output from a shell command.
 type Line struct {
@@ -118,7 +144,7 @@ func (s *ShellCommandRunner) RunCommandAsync(ctx command.ProjectContext) (chan<-
 		ctx.Log.Debug("starting '%s %q' in '%s'", s.shell.String(), s.command, s.workingDir)
 		err := s.cmd.Start()
 		if err != nil {
-			err = fmt.Errorf("running '%s %q' in '%s': %w", s.shell.String(), s.command, s.workingDir, err)
+			err = fmt.Errorf("running '%s %q' in '%s': %w", s.shell.String(), commandSummary(s.command), s.workingDir, err)
 			ctx.Log.Err("%s", err.Error())
 			outCh <- Line{Err: err}
 			return
@@ -161,7 +187,7 @@ func (s *ShellCommandRunner) RunCommandAsync(ctx command.ProjectContext) (chan<-
 			if err := scanner.Err(); err != nil {
 				// Don't fail the command over unreadable output, but
 				// surface what happened instead of dropping it silently.
-				ctx.Log.Err("reading %s of '%s': %v", name, s.command, err)
+				ctx.Log.Err("reading %s of '%s': %v", name, commandSummary(s.command), err)
 				message := fmt.Sprintf("[atlantis] error reading %s: %v", name, err)
 				if errors.Is(err, bufio.ErrTooLong) {
 					message = fmt.Sprintf("[atlantis] %s truncated: %v", name, err)
@@ -193,12 +219,12 @@ func (s *ShellCommandRunner) RunCommandAsync(ctx command.ProjectContext) (chan<-
 
 		// We're done now. Send an error if there was one.
 		if err != nil {
-			err = fmt.Errorf("running '%s' '%s' in '%s': %w", s.shell.String(), s.command, s.workingDir, err)
+			err = fmt.Errorf("running '%s' '%s' in '%s': %w", s.shell.String(), commandSummary(s.command), s.workingDir, err)
 			log.Err("%s", err.Error())
 			outCh <- Line{Err: err}
 		} else {
 			log.Info("successfully ran '%s' '%s' in '%s'",
-				s.shell.String(), s.command, s.workingDir)
+				s.shell.String(), commandSummary(s.command), s.workingDir)
 		}
 	}()
 

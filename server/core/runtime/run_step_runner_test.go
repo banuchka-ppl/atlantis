@@ -61,7 +61,7 @@ func TestRunStepRunner_Run(t *testing.T) {
 		},
 		{
 			Command: "echo 'a",
-			ExpErr:  "exit status 2: running \"echo 'a\" in",
+			ExpErr:  "running 'sh -c' 'echo 'a' in",
 		},
 		{
 			Command: "echo hi >> file && cat file",
@@ -69,7 +69,13 @@ func TestRunStepRunner_Run(t *testing.T) {
 		},
 		{
 			Command: "lkjlkj",
-			ExpErr:  "exit status 127: running \"lkjlkj\" in",
+			ExpErr:  "running 'sh -c' 'lkjlkj' in",
+		},
+		{
+			// Multi-line commands surface only a bounded first-line summary
+			// in the error; the script body must not be replayed.
+			Command: "echo first-line\necho second-line\nexit 2",
+			ExpErr:  "running 'sh -c' 'echo first-line…' in",
 		},
 		{
 			Command: "echo workspace=$WORKSPACE version=$ATLANTIS_TERRAFORM_VERSION dir=$DIR planfile=$PLANFILE showfile=$SHOWFILE project=$PROJECT_NAME",

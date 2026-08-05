@@ -82,6 +82,67 @@ func TestShellCommandRunner_Run(t *testing.T) {
 	}
 }
 
+func TestShellCommandRunner_ErrorBoundsCommand(t *testing.T) {
+	// Failure errors reach the job page and PR comments, so they must carry
+	// only a single-line, byte-bounded command summary — never a multi-line
+	// workflow script body. The full command is still debug-logged at start.
+	longTail := strings.Repeat("x", 200)
+	cases := []struct {
+		name          string
+		command       string
+		expInError    string
+		notInError    string
+		expExitStatus string
+	}{
+		{
+			name:          "multi-line script keeps first line only",
+			command:       "echo first-line\necho second-line-body\nexit 4",
+			expInError:    "running 'sh -c' 'echo first-line…' in",
+			notInError:    "second-line-body",
+			expExitStatus: "exit status 4",
+		},
+		{
+			name:          "long single line is byte-bounded",
+			command:       "false # " + longTail,
+			expInError:    "running 'sh -c' '" + ("false # " + longTail)[:120] + "…' in",
+			notInError:    longTail,
+			expExitStatus: "exit status 1",
+		},
+		{
+			name:          "short command is unchanged",
+			command:       "exit 3",
+			expInError:    "running 'sh -c' 'exit 3' in",
+			expExitStatus: "exit status 3",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			RegisterMockTestingT(t)
+			log := logmocks.NewMockSimpleLogging()
+			When(log.With(Any[string](), Any[any]())).ThenReturn(log)
+			ctx := command.ProjectContext{
+				Log:        log,
+				Workspace:  "default",
+				RepoRelDir: ".",
+			}
+			projectCmdOutputHandler := mocks.NewMockProjectCommandOutputHandler()
+
+			cwd, err := os.Getwd()
+			Ok(t, err)
+
+			runner := models.NewShellCommandRunner(nil, c.command, []string{}, cwd, false, projectCmdOutputHandler)
+			_, err = runner.Run(ctx)
+			ErrContains(t, c.expInError, err)
+			ErrContains(t, c.expExitStatus, err)
+			if c.notInError != "" {
+				Assert(t, !strings.Contains(err.Error(), c.notInError),
+					"error %q must not contain %q", err.Error(), c.notInError)
+			}
+		})
+	}
+}
+
 func TestShellCommandRunner_RunLongOutputLines(t *testing.T) {
 	// Regression test: lines longer than the default bufio.Scanner token
 	// size limit (64KiB) must not be silently dropped. Terraform writes
