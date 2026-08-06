@@ -32,6 +32,16 @@ const (
 	ProjectRunDiagnosticCodeToolFailed         ProjectRunDiagnosticCode = "tool_failed"
 	ProjectRunDiagnosticCodeArtifactFailed     ProjectRunDiagnosticCode = "artifact_failed"
 	ProjectRunDiagnosticCodeInternalError      ProjectRunDiagnosticCode = "internal_error"
+
+	// Classified command-failure codes. The step CLI derives these from
+	// conservative failure signatures and publishes them with fixed
+	// allowlisted summaries; values match the CLI's failure classes.
+	ProjectRunDiagnosticCodeProviderRateLimited        ProjectRunDiagnosticCode = "provider_rate_limited"
+	ProjectRunDiagnosticCodeProviderValidationRejected ProjectRunDiagnosticCode = "provider_validation_rejected"
+	ProjectRunDiagnosticCodeProviderAuthFailed         ProjectRunDiagnosticCode = "provider_auth_failed"
+	ProjectRunDiagnosticCodeHelmChartNotFound          ProjectRunDiagnosticCode = "helm_chart_not_found"
+	ProjectRunDiagnosticCodeDependencyInitFailed       ProjectRunDiagnosticCode = "dependency_init_failed"
+	ProjectRunDiagnosticCodeTimeout                    ProjectRunDiagnosticCode = "timeout"
 )
 
 // IsValid reports whether the code belongs to the versioned result contract.
@@ -43,7 +53,13 @@ func (c ProjectRunDiagnosticCode) IsValid() bool {
 		ProjectRunDiagnosticCodeTerraformFailed,
 		ProjectRunDiagnosticCodeToolFailed,
 		ProjectRunDiagnosticCodeArtifactFailed,
-		ProjectRunDiagnosticCodeInternalError:
+		ProjectRunDiagnosticCodeInternalError,
+		ProjectRunDiagnosticCodeProviderRateLimited,
+		ProjectRunDiagnosticCodeProviderValidationRejected,
+		ProjectRunDiagnosticCodeProviderAuthFailed,
+		ProjectRunDiagnosticCodeHelmChartNotFound,
+		ProjectRunDiagnosticCodeDependencyInitFailed,
+		ProjectRunDiagnosticCodeTimeout:
 		return true
 	default:
 		return false
