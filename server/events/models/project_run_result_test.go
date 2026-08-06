@@ -61,6 +61,12 @@ func TestProjectRunDiagnosticCodeIsValid(t *testing.T) {
 		models.ProjectRunDiagnosticCodeToolFailed,
 		models.ProjectRunDiagnosticCodeArtifactFailed,
 		models.ProjectRunDiagnosticCodeInternalError,
+		models.ProjectRunDiagnosticCodeProviderRateLimited,
+		models.ProjectRunDiagnosticCodeProviderValidationRejected,
+		models.ProjectRunDiagnosticCodeProviderAuthFailed,
+		models.ProjectRunDiagnosticCodeHelmChartNotFound,
+		models.ProjectRunDiagnosticCodeDependencyInitFailed,
+		models.ProjectRunDiagnosticCodeTimeout,
 	}
 
 	for _, code := range validCodes {
