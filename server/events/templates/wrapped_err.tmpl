@@ -9,4 +9,12 @@
 {{ .RenderedContext }}
 {{- end }}
 </details>
+{{ if ne .DiagnosticURL "" -}}
+
+[View protected diagnostic]({{ .DiagnosticURL }})
+{{ end -}}
+{{ if .DiagnosticUnavailable -}}
+
+Protected diagnostic unavailable for this run.
+{{ end -}}
 {{ end -}}

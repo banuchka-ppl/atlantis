@@ -220,6 +220,21 @@ func (p ProjectCommandOutput) ReviewerError() string {
 	return p.Error.Error()
 }
 
+// ReviewerDiagnosticURL returns only a server-generated protected evidence URL.
+func (p ProjectCommandOutput) ReviewerDiagnosticURL() string {
+	if p.ProjectRunResult == nil || p.ProjectRunResult.Diagnostic == nil {
+		return ""
+	}
+	return p.ProjectRunResult.Diagnostic.EvidenceURL
+}
+
+// ReviewerDiagnosticUnavailable reports that a typed failure has no protected link.
+func (p ProjectCommandOutput) ReviewerDiagnosticUnavailable() bool {
+	return p.ProjectRunResult != nil &&
+		p.ProjectRunResult.Diagnostic != nil &&
+		p.ProjectRunResult.Diagnostic.EvidenceURL == ""
+}
+
 // IsSuccessful returns true if this project result had no errors.
 func (p ProjectResult) IsSuccessful() bool {
 	return p.PlanSuccess != nil || (p.PolicyCheckResults != nil && p.Error == nil && p.Failure == "") || p.ApplySuccess != ""

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	eventmodels "github.com/runatlantis/atlantis/server/events/models"
 	tally "github.com/uber-go/tally/v4"
 )
@@ -31,6 +32,8 @@ const (
 	StepResultFileEnvVar = "ATLANTIS_STEP_RESULT_FILE"
 	// StepResultModeEnvVar tells the result producer whether its typed result is shadowed or authoritative.
 	StepResultModeEnvVar = "ATLANTIS_STEP_RESULT_MODE"
+	// StepJobIDEnvVar binds retained diagnostic evidence to Atlantis's project-run identity.
+	StepJobIDEnvVar = "ATLANTIS_JOB_ID"
 )
 
 // StructuredRunResultMode controls how custom run steps publish structured results.
@@ -141,6 +144,7 @@ type StepDiagnostic struct {
 	Code       eventmodels.ProjectRunDiagnosticCode `json:"code"`
 	Summary    string                               `json:"summary"`
 	DetailPath string                               `json:"detail_path,omitempty"`
+	EvidenceID string                               `json:"evidence_id,omitempty"`
 }
 
 // RunExecution preserves the console channel and process outcome separately from the typed result.
@@ -570,6 +574,22 @@ func validateStepDiagnostic(diagnostic *StepDiagnostic) error {
 	}
 	if diagnostic.DetailPath != "" && !isSafeRelativeResultPath(diagnostic.DetailPath) {
 		return fmt.Errorf("structured run result diagnostic path must be relative and remain in the working directory")
+	}
+	if diagnostic.EvidenceID != "" {
+		evidenceID, err := uuid.Parse(diagnostic.EvidenceID)
+		if err != nil || evidenceID.String() != diagnostic.EvidenceID {
+			return fmt.Errorf("structured run result diagnostic evidence ID must be a canonical UUID")
+		}
+	}
+	return nil
+}
+
+func validateStepDiagnosticEvidenceJob(diagnostic *StepDiagnostic, jobID string) error {
+	if diagnostic == nil || diagnostic.EvidenceID == "" {
+		return nil
+	}
+	if diagnostic.EvidenceID != jobID {
+		return fmt.Errorf("structured run result diagnostic evidence does not match the Atlantis job")
 	}
 	return nil
 }

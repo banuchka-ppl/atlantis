@@ -128,6 +128,8 @@ const (
 	PPLXCommandCompletionTokenFile   = "pplx-command-completion-token-file"
 	PPLXNativeResultCommentMarkers   = "pplx-native-result-comment-markers"
 	PPLXNativeResultCommentUpsert    = "pplx-native-result-comment-upsert"
+	PPLXDiagEvidenceCFTeamDomain     = "pplx-diagnostic-evidence-cf-access-team-domain"
+	PPLXDiagEvidenceCFAudience       = "pplx-diagnostic-evidence-cf-access-audience"
 	PPLXStructuredRunResultsMode     = "pplx-structured-run-results-mode"
 	PPLXStructuredApplyResultsMode   = "pplx-structured-apply-results-mode"
 	PPLXStructuredResultRepos        = "pplx-structured-run-results-repo-allowlist"
@@ -538,6 +540,14 @@ var stringFlags = map[string]stringFlag{
 	},
 	PPLXCommandCompletionTokenFile: {
 		description: "Fork-only bearer token file path for command-completion publication.",
+		hidden:      true,
+	},
+	PPLXDiagEvidenceCFTeamDomain: {
+		description: "Fork-only Cloudflare Access team domain for authenticated diagnostic evidence.",
+		hidden:      true,
+	},
+	PPLXDiagEvidenceCFAudience: {
+		description: "Fork-only exact Cloudflare Access application audience for authenticated diagnostic evidence.",
 		hidden:      true,
 	},
 	PPLXStructuredRunResultsMode: {
@@ -1179,6 +1189,12 @@ func (s *ServerCmd) validate(userConfig server.UserConfig) error {
 	}
 	if _, err := runtime.ParseStructuredRunResultWorkflowPatterns(userConfig.PPLXStructuredResultWorkflows); err != nil {
 		return fmt.Errorf("invalid --%s: %w", PPLXStructuredResultWorkflows, err)
+	}
+	if (userConfig.PPLXDiagEvidenceCFTeamDomain == "") !=
+		(userConfig.PPLXDiagEvidenceCFAudience == "") {
+		return fmt.Errorf("--%s and --%s must be configured together",
+			PPLXDiagEvidenceCFTeamDomain,
+			PPLXDiagEvidenceCFAudience)
 	}
 
 	if (userConfig.SSLKeyFile == "") != (userConfig.SSLCertFile == "") {

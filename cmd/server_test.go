@@ -126,6 +126,8 @@ var testFlags = map[string]any{
 	PPLXCommandCompletionRepos:       "ppl-ai/agi",
 	PPLXCommandCompletionSocketPath:  "/var/run/atlantis/completions.sock",
 	PPLXCommandCompletionTokenFile:   "/var/run/secrets/atlantis/completions-token",
+	PPLXDiagEvidenceCFAudience:       "atlantis-access-audience",
+	PPLXDiagEvidenceCFTeamDomain:     "perplexity-ai",
 	PPLXNativeResultCommentMarkers:   false,
 	PPLXNativeResultCommentUpsert:    false,
 	PPLXStructuredApplyResultsMode:   "prefer",

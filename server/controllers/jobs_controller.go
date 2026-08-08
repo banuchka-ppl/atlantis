@@ -29,15 +29,17 @@ func (g JobIDKeyGenerator) Generate(r *http.Request) (string, error) {
 }
 
 type JobsController struct {
-	AtlantisVersion          string                       `validate:"required"`
-	AtlantisURL              *url.URL                     `validate:"required"`
-	Logger                   logging.SimpleLogging        `validate:"required"`
-	ProjectJobsTemplate      web_templates.TemplateWriter `validate:"required"`
-	ProjectJobsErrorTemplate web_templates.TemplateWriter `validate:"required"`
-	Database                 db.Database                  `validate:"required"`
-	WsMux                    *websocket.Multiplexor       `validate:"required"`
-	KeyGenerator             JobIDKeyGenerator
-	StatsScope               tally.Scope `validate:"required"`
+	AtlantisVersion                 string   `validate:"required"`
+	AtlantisURL                     *url.URL `validate:"required"`
+	DiagnosticEvidenceAuthenticator DiagnosticEvidenceAuthenticator
+	DiagnosticEvidenceRoot          string
+	Logger                          logging.SimpleLogging        `validate:"required"`
+	ProjectJobsTemplate             web_templates.TemplateWriter `validate:"required"`
+	ProjectJobsErrorTemplate        web_templates.TemplateWriter `validate:"required"`
+	Database                        db.Database                  `validate:"required"`
+	WsMux                           *websocket.Multiplexor       `validate:"required"`
+	KeyGenerator                    JobIDKeyGenerator
+	StatsScope                      tally.Scope `validate:"required"`
 }
 
 func (j *JobsController) getProjectJobs(w http.ResponseWriter, r *http.Request) error {

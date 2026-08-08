@@ -3,6 +3,12 @@
 ```
 {{ .Error }}
 ```
+{{ if ne .DiagnosticURL "" -}}
+[Ver diagnóstico protegido]({{ .DiagnosticURL }})
+{{ end -}}
+{{ if .DiagnosticUnavailable -}}
+El diagnóstico protegido no está disponible para esta ejecución.
+{{ end -}}
 {{ if ne .RenderedContext "" -}}
 {{ .RenderedContext }}
 {{ end -}}

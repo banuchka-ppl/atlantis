@@ -1317,6 +1317,44 @@ The path must resolve directly to a regular file of at most 4 KiB that is not
 accessible by group or other users; symlinks are rejected. A missing or unsafe
 token is a retryable delivery failure and does not prevent startup.
 
+### `--pplx-diagnostic-evidence-cf-access-audience`
+
+```bash
+atlantis server \
+  --pplx-diagnostic-evidence-cf-access-audience='<application-audience>' \
+  --pplx-diagnostic-evidence-cf-access-team-domain='<team>'
+# or
+ATLANTIS_PPLX_DIAGNOSTIC_EVIDENCE_CF_ACCESS_AUDIENCE='<application-audience>'
+ATLANTIS_PPLX_DIAGNOSTIC_EVIDENCE_CF_ACCESS_TEAM_DOMAIN='<team>'
+```
+
+Fork-only hidden option that pins the exact Cloudflare Access application
+audience accepted by the authenticated exact-run diagnostic endpoint. It must
+be configured together with
+`--pplx-diagnostic-evidence-cf-access-team-domain`; setting only one is a
+startup error. When both are omitted, the endpoint remains disabled and
+returns not found.
+
+Atlantis validates the origin assertion's signature, issuer, expiry, audience,
+and human email claim. Header presence alone is not authentication.
+
+### `--pplx-diagnostic-evidence-cf-access-team-domain`
+
+```bash
+atlantis server \
+  --pplx-diagnostic-evidence-cf-access-team-domain='<team>' \
+  --pplx-diagnostic-evidence-cf-access-audience='<application-audience>'
+# or
+ATLANTIS_PPLX_DIAGNOSTIC_EVIDENCE_CF_ACCESS_TEAM_DOMAIN='<team>'
+ATLANTIS_PPLX_DIAGNOSTIC_EVIDENCE_CF_ACCESS_AUDIENCE='<application-audience>'
+```
+
+Fork-only hidden option that selects the Cloudflare Access issuer and JWKS
+host for the authenticated exact-run diagnostic endpoint. The value must be a
+single team label, optionally followed by `.cloudflareaccess.com`; arbitrary
+JWKS hosts are rejected. It must be configured together with the exact
+application audience described above.
+
 ### `--pplx-native-result-comment-markers`
 
 ```bash
@@ -1360,10 +1398,12 @@ migration for eligible apply custom run steps. Supported values are `off`,
 `shadow`, `prefer`, and `required`; the default is `off`. It uses the repository
 and workflow allowlists documented below.
 
-For every enabled mode, Atlantis appends both `ATLANTIS_STEP_RESULT_FILE` and
-`ATLANTIS_STEP_RESULT_MODE` after workflow-defined environment variables. The
-result contract carries the apply outcome, normalized changes, and an optional
-bounded diagnostic sidecar.
+For every enabled mode, Atlantis appends `ATLANTIS_STEP_RESULT_FILE`,
+`ATLANTIS_STEP_RESULT_MODE`, and the canonical per-project `ATLANTIS_JOB_ID`
+after workflow-defined environment variables. The result contract carries the
+apply outcome, normalized changes, and an optional bounded diagnostic sidecar.
+A diagnostic may carry `evidence_id` only when it exactly equals that job ID;
+Atlantis rejects a result that attempts to reference another run.
 
 In `shadow`, Atlantis validates and compares an optional typed result while the
 legacy process result and output remain authoritative. In `prefer`, a valid
@@ -1415,7 +1455,10 @@ apply steps or change their legacy behavior. Repository and workflow allowlists
 continue to scope the mode, and out-of-scope steps keep their existing behavior.
 
 Atlantis removes the per-step result directory after processing. Workflow
-environment configuration cannot override the path selected by Atlantis.
+environment configuration cannot override the path, rollout mode, or job ID
+selected by Atlantis. A diagnostic `evidence_id` is a canonical UUID reference,
+not a path or URL, and must equal the injected `ATLANTIS_JOB_ID`. Atlantis
+constructs any protected diagnostic URL itself after validating that binding.
 
 ### `--pplx-structured-run-results-repo-allowlist`
 

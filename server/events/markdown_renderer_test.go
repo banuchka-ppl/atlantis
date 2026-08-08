@@ -270,9 +270,10 @@ func TestMarkdownRenderer_UsesTypedPlanDiagnostic(t *testing.T) {
 				ProjectRunResult: &models.ProjectRunResult{
 					Outcome: models.ProjectRunOutcomeError,
 					Diagnostic: &models.ProjectRunDiagnostic{
-						Code:    "terraform_failed",
-						Summary: "Terraform plan failed.",
-						Detail:  "typed bounded diagnostic",
+						Code:        "terraform_failed",
+						Summary:     "Terraform plan failed.",
+						Detail:      "typed bounded diagnostic",
+						EvidenceURL: "https://atlantis.example/jobs/exact-run/diagnostic",
 					},
 				},
 			},
@@ -288,7 +289,13 @@ func TestMarkdownRenderer_UsesTypedPlanDiagnostic(t *testing.T) {
 	)
 
 	Assert(t, strings.Contains(rendered, "typed bounded diagnostic"), "expected typed diagnostic, got: %s", rendered)
+	Assert(t, strings.Contains(rendered, "[View protected diagnostic](https://atlantis.example/jobs/exact-run/diagnostic)"), "expected protected diagnostic link, got: %s", rendered)
+	Assert(t, !strings.Contains(rendered, "Protected diagnostic unavailable"), "available evidence was labeled unavailable: %s", rendered)
 	Assert(t, !strings.Contains(rendered, "legacy operational failure detail"), "legacy diagnostic leaked into reviewer output: %s", rendered)
+
+	result.ProjectResults[0].ProjectRunResult.Diagnostic.EvidenceURL = ""
+	rendered = renderer.Render(ctx, result, &events.CommentCommand{Name: command.Plan})
+	Assert(t, strings.Contains(rendered, "Protected diagnostic unavailable for this run."), "missing evidence was not explicit: %s", rendered)
 }
 
 func TestMarkdownRenderer_ExposesTypedPlanResultToTemplates(t *testing.T) {

@@ -171,12 +171,18 @@ type JobMessageSender interface {
 	Complete(ctx command.ProjectContext, status jobs.JobStatus)
 }
 
+// DiagnosticEvidenceURLGenerator creates server-owned exact-run evidence URLs.
+type DiagnosticEvidenceURLGenerator interface {
+	GenerateProjectDiagnosticEvidenceURL(ctx command.ProjectContext) (string, error)
+}
+
 // ProjectOutputWrapper is a decorator that creates a new PR status check per project.
 // The status contains a url that outputs current progress of the terraform plan/apply command.
 type ProjectOutputWrapper struct {
 	ProjectCommandRunner
-	JobMessageSender JobMessageSender
-	JobURLSetter     JobURLSetter
+	DiagnosticEvidenceURLGenerator DiagnosticEvidenceURLGenerator
+	JobMessageSender               JobMessageSender
+	JobURLSetter                   JobURLSetter
 }
 
 func (p *ProjectOutputWrapper) Plan(ctx command.ProjectContext) command.ProjectCommandOutput {
@@ -204,7 +210,9 @@ func jobStatus(result command.ProjectCommandOutput) jobs.JobStatus {
 
 func (p *ProjectOutputWrapper) updateProjectPRStatus(commandName command.Name, ctx command.ProjectContext, execute func(ctx command.ProjectContext) command.ProjectCommandOutput) command.ProjectCommandOutput {
 	if ctx.SuppressVCSStatus {
-		return execute(ctx)
+		result := execute(ctx)
+		p.bindDiagnosticEvidenceURL(ctx, &result)
+		return result
 	}
 
 	// Create a PR status to track project's plan status. The status will
@@ -216,6 +224,7 @@ func (p *ProjectOutputWrapper) updateProjectPRStatus(commandName command.Name, c
 
 	// ensures we are differentiating between project level command and overall command
 	result := execute(ctx)
+	p.bindDiagnosticEvidenceURL(ctx, &result)
 
 	if result.Error != nil || result.Failure != "" {
 		if err := p.JobURLSetter.SetJobURLWithStatus(ctx, commandName, models.FailedCommitStatus, &result); err != nil {
@@ -236,6 +245,26 @@ func (p *ProjectOutputWrapper) updateProjectPRStatus(commandName command.Name, c
 	}
 
 	return result
+}
+
+func (p *ProjectOutputWrapper) bindDiagnosticEvidenceURL(ctx command.ProjectContext, result *command.ProjectCommandOutput) {
+	if p.DiagnosticEvidenceURLGenerator == nil || result.ProjectRunResult == nil || result.ProjectRunResult.Diagnostic == nil {
+		return
+	}
+	diagnostic := result.ProjectRunResult.Diagnostic
+	if diagnostic.EvidenceID == "" {
+		return
+	}
+	if diagnostic.EvidenceID != ctx.JobID {
+		diagnostic.EvidenceID = ""
+		return
+	}
+	diagnosticURL, err := p.DiagnosticEvidenceURLGenerator.GenerateProjectDiagnosticEvidenceURL(ctx)
+	if err != nil {
+		ctx.Log.Err("generating protected diagnostic URL: %s", err)
+		return
+	}
+	diagnostic.EvidenceURL = diagnosticURL
 }
 
 func (p *ProjectOutputWrapper) PublishDeferredApplyStatuses(projectCmds []command.ProjectContext, result command.Result, status models.CommitStatus) {
@@ -1227,9 +1256,10 @@ func newProjectRunResult(completed *runtime.CompletedRun) *models.ProjectRunResu
 	}
 	if completed.Result.Diagnostic != nil {
 		result.Diagnostic = &models.ProjectRunDiagnostic{
-			Code:    completed.Result.Diagnostic.Code,
-			Summary: completed.Result.Diagnostic.Summary,
-			Detail:  completed.DiagnosticDetail,
+			Code:       completed.Result.Diagnostic.Code,
+			Summary:    completed.Result.Diagnostic.Summary,
+			Detail:     completed.DiagnosticDetail,
+			EvidenceID: completed.Result.Diagnostic.EvidenceID,
 		}
 	}
 	return result
