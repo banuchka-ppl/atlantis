@@ -104,6 +104,8 @@ type UserConfig struct {
 	PPLXCommandCompletionTokenFile  string `mapstructure:"pplx-command-completion-token-file"`
 	PPLXNativeResultCommentMarkers  bool   `mapstructure:"pplx-native-result-comment-markers"`
 	PPLXNativeResultCommentUpsert   bool   `mapstructure:"pplx-native-result-comment-upsert"`
+	PPLXDiagEvidenceCFTeamDomain    string `mapstructure:"pplx-diagnostic-evidence-cf-access-team-domain"`
+	PPLXDiagEvidenceCFAudience      string `mapstructure:"pplx-diagnostic-evidence-cf-access-audience"`
 	PPLXStructuredRunResultsMode    string `mapstructure:"pplx-structured-run-results-mode"`
 	PPLXStructuredApplyResultsMode  string `mapstructure:"pplx-structured-apply-results-mode"`
 	PPLXStructuredResultRepos       string `mapstructure:"pplx-structured-run-results-repo-allowlist"`

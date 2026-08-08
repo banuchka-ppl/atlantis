@@ -62,6 +62,7 @@ func TestProjectRunDiagnosticCodeIsValid(t *testing.T) {
 		models.ProjectRunDiagnosticCodeArtifactFailed,
 		models.ProjectRunDiagnosticCodeInternalError,
 		models.ProjectRunDiagnosticCodeProviderRateLimited,
+		models.ProjectRunDiagnosticCodeProviderLookupNotFound,
 		models.ProjectRunDiagnosticCodeProviderValidationRejected,
 		models.ProjectRunDiagnosticCodeProviderAuthFailed,
 		models.ProjectRunDiagnosticCodeHelmChartNotFound,

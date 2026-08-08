@@ -121,6 +121,24 @@ func TestNewServer_EnableDriftRemediationRequiresDriftDetection(t *testing.T) {
 	ErrContains(t, "--enable-drift-remediation requires --enable-drift-detection", err)
 }
 
+func TestNewServer_DiagnosticEvidenceRequiresCompleteCloudflareAccessConfig(t *testing.T) {
+	tests := []server.UserConfig{
+		{PPLXDiagEvidenceCFTeamDomain: testAtlantisUrl},
+		{PPLXDiagEvidenceCFAudience: "audience"},
+	}
+	for _, partial := range tests {
+		partial.DataDir = t.TempDir()
+		partial.AtlantisURL = testAtlantisUrl
+		partial.LockingDBType = testLockingDBType
+		partial.GithubHostname = testGitHubHostName
+		partial.GithubUser = testGitHubUser
+
+		_, err := server.NewServer(partial, server.Config{AtlantisVersion: testAtlantisVersion})
+
+		Assert(t, err != nil, "partial diagnostic evidence authentication config was accepted")
+	}
+}
+
 func TestNewServer_RejectsUnknownStructuredRunResultMode(t *testing.T) {
 	_, err := server.NewServer(
 		server.UserConfig{PPLXStructuredRunResultsMode: "unknown"},

@@ -80,6 +80,8 @@ const (
 	LockViewRouteIDQueryParam = "id"
 	// ProjectJobsViewRouteName is the named route in mux.Router for the log stream view.
 	ProjectJobsViewRouteName = "project-jobs-detail"
+	// ProjectDiagnosticEvidenceRouteName is the authenticated exact-run evidence route.
+	ProjectDiagnosticEvidenceRouteName = "project-diagnostic-evidence"
 	// binDirName is the name of the directory inside our data dir where
 	// we download binaries.
 	BinDirName = "bin"
@@ -173,6 +175,22 @@ var staticAssets embed.FS
 func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	if userConfig.EnableDriftRemediation && !userConfig.EnableDriftDetection {
 		return nil, errors.New("--enable-drift-remediation requires --enable-drift-detection")
+	}
+	if (userConfig.PPLXDiagEvidenceCFTeamDomain == "") !=
+		(userConfig.PPLXDiagEvidenceCFAudience == "") {
+		return nil, errors.New("diagnostic evidence Cloudflare Access team domain and audience must be configured together")
+	}
+	var diagnosticEvidenceAuthenticator controllers.DiagnosticEvidenceAuthenticator
+	if userConfig.PPLXDiagEvidenceCFTeamDomain != "" {
+		var err error
+		diagnosticEvidenceAuthenticator, err = controllers.NewCloudflareAccessAuthenticator(
+			userConfig.PPLXDiagEvidenceCFTeamDomain,
+			userConfig.PPLXDiagEvidenceCFAudience,
+			nil,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("configuring diagnostic evidence authentication: %w", err)
+		}
 	}
 	commandCompletionConfig, err := events.ParseCommandCompletionConfig(
 		userConfig.PPLXCommandCompletionMode,
@@ -489,11 +507,13 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 
 	underlyingRouter := mux.NewRouter()
 	router := &Router{
-		AtlantisURL:               parsedURL,
-		LockViewRouteIDQueryParam: LockViewRouteIDQueryParam,
-		LockViewRouteName:         LockViewRouteName,
-		ProjectJobsViewRouteName:  ProjectJobsViewRouteName,
-		Underlying:                underlyingRouter,
+		AtlantisURL:                        parsedURL,
+		DiagnosticEvidenceEnabled:          diagnosticEvidenceAuthenticator != nil,
+		LockViewRouteIDQueryParam:          LockViewRouteIDQueryParam,
+		LockViewRouteName:                  LockViewRouteName,
+		ProjectDiagnosticEvidenceRouteName: ProjectDiagnosticEvidenceRouteName,
+		ProjectJobsViewRouteName:           ProjectJobsViewRouteName,
+		Underlying:                         underlyingRouter,
 	}
 
 	var projectCmdOutputHandler jobs.ProjectCommandOutputHandler
@@ -869,9 +889,10 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	}
 
 	projectOutputWrapper := &events.ProjectOutputWrapper{
-		JobMessageSender:     projectCmdOutputHandler,
-		ProjectCommandRunner: projectCommandRunner,
-		JobURLSetter:         jobs.NewJobURLSetter(router, commitStatusUpdater),
+		DiagnosticEvidenceURLGenerator: router,
+		JobMessageSender:               projectCmdOutputHandler,
+		ProjectCommandRunner:           projectCommandRunner,
+		JobURLSetter:                   jobs.NewJobURLSetter(router, commitStatusUpdater),
 	}
 	instrumentedProjectCmdRunner := events.NewInstrumentedProjectCommandRunner(
 		statsScope,
@@ -1074,15 +1095,17 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	)
 
 	jobsController := &controllers.JobsController{
-		AtlantisVersion:          config.AtlantisVersion,
-		AtlantisURL:              parsedURL,
-		Logger:                   logger,
-		ProjectJobsTemplate:      web_templates.ProjectJobsTemplate,
-		ProjectJobsErrorTemplate: web_templates.ProjectJobsErrorTemplate,
-		Database:                 database,
-		WsMux:                    wsMux,
-		KeyGenerator:             controllers.JobIDKeyGenerator{},
-		StatsScope:               statsScope.SubScope("api"),
+		AtlantisVersion:                 config.AtlantisVersion,
+		AtlantisURL:                     parsedURL,
+		DiagnosticEvidenceAuthenticator: diagnosticEvidenceAuthenticator,
+		DiagnosticEvidenceRoot:          filepath.Join(userConfig.DataDir, "logs"),
+		Logger:                          logger,
+		ProjectJobsTemplate:             web_templates.ProjectJobsTemplate,
+		ProjectJobsErrorTemplate:        web_templates.ProjectJobsErrorTemplate,
+		Database:                        database,
+		WsMux:                           wsMux,
+		KeyGenerator:                    controllers.JobIDKeyGenerator{},
+		StatsScope:                      statsScope.SubScope("api"),
 	}
 
 	apiController := &controllers.APIController{
@@ -1230,6 +1253,7 @@ func (s *Server) SetupRoutes() {
 		Queries(LockViewRouteIDQueryParam, fmt.Sprintf("{%s}", LockViewRouteIDQueryParam)).Name(LockViewRouteName)
 	s.Router.HandleFunc("/jobs/{job-id}", s.JobsController.GetProjectJobs).Methods("GET").Name(ProjectJobsViewRouteName)
 	s.Router.HandleFunc("/jobs/{job-id}/ws", s.JobsController.GetProjectJobsWS).Methods("GET")
+	s.Router.HandleFunc("/jobs/{job-id}/diagnostic", s.JobsController.GetProjectDiagnosticEvidence).Methods("GET").Name(ProjectDiagnosticEvidenceRouteName)
 
 	r, ok := s.StatsReporter.(prometheus.Reporter)
 	if ok {

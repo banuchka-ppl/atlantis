@@ -194,9 +194,11 @@ func (r *RunStepRunner) runWithResult(
 	}
 	if structuredResult != nil {
 		// Append this last so a workflow-provided env cannot redirect Atlantis to
-		// read a result outside the directory it allocated or spoof rollout authority.
+		// read a result outside the directory it allocated, spoof rollout authority,
+		// or bind evidence to a different project run.
 		finalEnvVars = append(finalEnvVars, fmt.Sprintf("%s=%s", StepResultFileEnvVar, structuredResult.resultPath))
 		finalEnvVars = append(finalEnvVars, fmt.Sprintf("%s=%s", StepResultModeEnvVar, structuredResult.mode))
+		finalEnvVars = append(finalEnvVars, fmt.Sprintf("%s=%s", StepJobIDEnvVar, ctx.JobID))
 	}
 
 	runner := models.NewShellCommandRunner(shell, command, finalEnvVars, path, streamOutput, r.ProjectCmdOutputHandler)
@@ -374,6 +376,9 @@ func (r *RunStepRunner) completeStructuredRunResult(
 	}
 
 	completed, err := (StructuredRunResultCompleter{}).CompleteRun(workingDir, resultPath, execution)
+	if err == nil {
+		err = validateStepDiagnosticEvidenceJob(completed.Result.Diagnostic, ctx.JobID)
+	}
 	if err != nil {
 		r.StructuredRunResultObserver.recordArtifact(commandName, "invalid")
 		if mode == StructuredRunResultModeRequired {

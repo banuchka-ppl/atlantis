@@ -37,6 +37,7 @@ const (
 	// conservative failure signatures and publishes them with fixed
 	// allowlisted summaries; values match the CLI's failure classes.
 	ProjectRunDiagnosticCodeProviderRateLimited        ProjectRunDiagnosticCode = "provider_rate_limited"
+	ProjectRunDiagnosticCodeProviderLookupNotFound     ProjectRunDiagnosticCode = "provider_lookup_not_found"
 	ProjectRunDiagnosticCodeProviderValidationRejected ProjectRunDiagnosticCode = "provider_validation_rejected"
 	ProjectRunDiagnosticCodeProviderAuthFailed         ProjectRunDiagnosticCode = "provider_auth_failed"
 	ProjectRunDiagnosticCodeHelmChartNotFound          ProjectRunDiagnosticCode = "helm_chart_not_found"
@@ -55,6 +56,7 @@ func (c ProjectRunDiagnosticCode) IsValid() bool {
 		ProjectRunDiagnosticCodeArtifactFailed,
 		ProjectRunDiagnosticCodeInternalError,
 		ProjectRunDiagnosticCodeProviderRateLimited,
+		ProjectRunDiagnosticCodeProviderLookupNotFound,
 		ProjectRunDiagnosticCodeProviderValidationRejected,
 		ProjectRunDiagnosticCodeProviderAuthFailed,
 		ProjectRunDiagnosticCodeHelmChartNotFound,
@@ -86,9 +88,11 @@ type ProjectRunReview struct {
 
 // ProjectRunDiagnostic is a bounded, stable failure description.
 type ProjectRunDiagnostic struct {
-	Code    ProjectRunDiagnosticCode
-	Summary string
-	Detail  string
+	Code        ProjectRunDiagnosticCode
+	Summary     string
+	Detail      string
+	EvidenceID  string
+	EvidenceURL string
 }
 
 // ProjectRunResult is the normalized typed result used by Atlantis consumers.

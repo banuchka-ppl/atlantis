@@ -75,12 +75,29 @@ func setupJobsRouter(t *testing.T) *server.Router {
 
 	underlyingRouter := mux.NewRouter()
 	underlyingRouter.HandleFunc("/jobs/{job-id}", func(_ http.ResponseWriter, _ *http.Request) {}).Methods("GET").Name("project-jobs-detail")
+	underlyingRouter.HandleFunc("/jobs/{job-id}/diagnostic", func(_ http.ResponseWriter, _ *http.Request) {}).Methods("GET").Name("project-diagnostic-evidence")
 
 	return &server.Router{
-		AtlantisURL:              atlantisURL,
-		Underlying:               underlyingRouter,
-		ProjectJobsViewRouteName: "project-jobs-detail",
+		AtlantisURL:                        atlantisURL,
+		DiagnosticEvidenceEnabled:          true,
+		ProjectDiagnosticEvidenceRouteName: "project-diagnostic-evidence",
+		Underlying:                         underlyingRouter,
+		ProjectJobsViewRouteName:           "project-jobs-detail",
 	}
+}
+
+func TestGenerateProjectDiagnosticEvidenceURLRequiresEnabledExactJob(t *testing.T) {
+	router := setupJobsRouter(t)
+	jobID := uuid.New().String()
+	ctx := command.ProjectContext{JobID: jobID}
+
+	gotURL, err := router.GenerateProjectDiagnosticEvidenceURL(ctx)
+
+	Ok(t, err)
+	Equals(t, fmt.Sprintf("http://localhost:4141/jobs/%s/diagnostic", jobID), gotURL)
+	router.DiagnosticEvidenceEnabled = false
+	_, err = router.GenerateProjectDiagnosticEvidenceURL(ctx)
+	Assert(t, err != nil, "disabled diagnostic evidence generated a URL")
 }
 
 func TestGenerateProjectJobURL_ShouldGenerateURLWhenJobIDSpecified(t *testing.T) {

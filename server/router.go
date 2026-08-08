@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/runatlantis/atlantis/server/events/command"
 )
@@ -22,6 +23,10 @@ type Router struct {
 	LockViewRouteName string
 	// ProjectJobsViewRouteName is the named route for the projects active jobs
 	ProjectJobsViewRouteName string
+	// ProjectDiagnosticEvidenceRouteName is the exact-run diagnostic route.
+	ProjectDiagnosticEvidenceRouteName string
+	// DiagnosticEvidenceEnabled controls whether protected links can be generated.
+	DiagnosticEvidenceEnabled bool
 	// LockViewRouteIDQueryParam is the query parameter needed to construct the
 	// lock view: underlying.Get(LockViewRouteName).URL(LockViewRouteIDQueryParam, "my id").
 	LockViewRouteIDQueryParam string
@@ -53,6 +58,19 @@ func (r *Router) GenerateProjectJobURL(ctx command.ProjectContext) (string, erro
 	}
 
 	return r.AtlantisURL.String() + jobURL.String(), nil
+}
+
+// GenerateProjectDiagnosticEvidenceURL returns the protected URL for one exact job.
+func (r *Router) GenerateProjectDiagnosticEvidenceURL(ctx command.ProjectContext) (string, error) {
+	parsed, err := uuid.Parse(ctx.JobID)
+	if !r.DiagnosticEvidenceEnabled || err != nil || parsed.String() != ctx.JobID {
+		return "", fmt.Errorf("diagnostic evidence is unavailable for job")
+	}
+	diagnosticURL, err := r.Underlying.Get(r.ProjectDiagnosticEvidenceRouteName).URL("job-id", ctx.JobID)
+	if err != nil {
+		return "", fmt.Errorf("creating diagnostic evidence URL for %s: %w", ctx.JobID, err)
+	}
+	return r.AtlantisURL.String() + diagnosticURL.String(), nil
 }
 
 func (r *Router) GenerateProjectWorkflowHookURL(hookID string) (string, error) {

@@ -72,8 +72,10 @@ type commonData struct {
 
 // errData is data about an error response.
 type errData struct {
-	Error           string
-	RenderedContext string
+	Error                 string
+	DiagnosticURL         string
+	DiagnosticUnavailable bool
+	RenderedContext       string
 	commonData
 }
 
@@ -224,7 +226,7 @@ func (m *MarkdownRenderer) Render(ctx *command.Context, res command.Result, cmd 
 	templates := m.markdownTemplates
 
 	if res.Error != nil {
-		return m.renderTemplateTrimSpace(templates.Lookup("unwrappedErrWithLog"), errData{res.Error.Error(), "", common})
+		return m.renderTemplateTrimSpace(templates.Lookup("unwrappedErrWithLog"), errData{Error: res.Error.Error(), commonData: common})
 	}
 	if res.Failure != "" {
 		return m.renderTemplateTrimSpace(templates.Lookup("failureWithLog"), failureData{res.Failure, "", common})
@@ -357,7 +359,13 @@ func (m *MarkdownRenderer) renderProjectResults(ctx *command.Context, results []
 			if m.shouldUseWrappedTmpl(vcsHost, reviewerError) {
 				tmpl = templates.Lookup("wrappedErr")
 			}
-			resultData.Rendered = m.renderTemplateTrimSpace(tmpl, errData{reviewerError, resultData.Rendered, common})
+			resultData.Rendered = m.renderTemplateTrimSpace(tmpl, errData{
+				Error:                 reviewerError,
+				DiagnosticURL:         result.ReviewerDiagnosticURL(),
+				DiagnosticUnavailable: result.ReviewerDiagnosticUnavailable(),
+				RenderedContext:       resultData.Rendered,
+				commonData:            common,
+			})
 			if common.CommandName == applyCommandTitle {
 				numApplyErrors++
 			}

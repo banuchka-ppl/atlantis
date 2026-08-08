@@ -27,6 +27,8 @@ import (
 
 const pplxManagedWorkflow = "terraform-just-a1b2c3d4e5f6"
 const pplxManagedRepo = "ppl-ai/agi"
+const diagnosticEvidenceID = "8f754d80-6f1e-44c8-a370-2f4752605d95"
+const otherDiagnosticEvidenceID = "d5611749-2c73-436a-bca7-2dc9d10bc6df"
 
 var pplxManagedWorkflowPatterns = []string{
 	"terraform-delete-module",
@@ -253,6 +255,59 @@ func TestRunStepRunner_RequiredReturnsValidatedErrorResult(t *testing.T) {
 	Equals(t, runtime.StepResultOutcomeError, result.StructuredResult.Result.Outcome)
 	Equals(t, "tool failed", result.StructuredResult.Result.Diagnostic.Summary)
 	assertNoStructuredResultDirectories(t, workingDir)
+}
+
+func TestRunStepRunner_RequiredBindsDiagnosticEvidenceToAtlantisJob(t *testing.T) {
+	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
+	ctx.JobID = diagnosticEvidenceID
+	workingDir := t.TempDir()
+	command := fmt.Sprintf(
+		`test "$%s" = '%s'; printf '%%s' '%s' > "$%s"; exit 7`,
+		runtime.StepJobIDEnvVar,
+		diagnosticEvidenceID,
+		`{"schema_version":1,"outcome":"error","diagnostic":{"code":"terraform_failed","summary":"Terraform failed.","evidence_id":"`+diagnosticEvidenceID+`"}}`,
+		runtime.StepResultFileEnvVar,
+	)
+
+	result, err := runner.RunWithResult(
+		ctx,
+		nil,
+		command,
+		workingDir,
+		map[string]string{runtime.StepJobIDEnvVar: otherDiagnosticEvidenceID},
+		false,
+		nil,
+		nil,
+	)
+
+	ErrContains(t, "exit status 7", err)
+	Assert(t, result.StructuredResult != nil, "expected a validated structured error result")
+	Equals(t, diagnosticEvidenceID, result.StructuredResult.Result.Diagnostic.EvidenceID)
+}
+
+func TestRunStepRunner_RequiredRejectsEvidenceFromAnotherJob(t *testing.T) {
+	runner, ctx := newStructuredResultRunStepRunner(t, runtime.StructuredRunResultModeRequired)
+	ctx.JobID = diagnosticEvidenceID
+	workingDir := t.TempDir()
+	command := fmt.Sprintf(
+		`printf '%%s' '%s' > "$%s"; exit 7`,
+		`{"schema_version":1,"outcome":"error","diagnostic":{"code":"terraform_failed","summary":"Terraform failed.","evidence_id":"`+otherDiagnosticEvidenceID+`"}}`,
+		runtime.StepResultFileEnvVar,
+	)
+
+	result, err := runner.RunWithResult(
+		ctx,
+		nil,
+		command,
+		workingDir,
+		nil,
+		false,
+		nil,
+		nil,
+	)
+
+	ErrContains(t, "structured run result diagnostic evidence does not match the Atlantis job", err)
+	Assert(t, result.StructuredResult == nil, "did not expect mismatched evidence")
 }
 
 func TestRunStepRunner_ShadowInvalidResultDoesNotChangeLegacyReturn(t *testing.T) {
@@ -820,6 +875,7 @@ func newStructuredResultRunStepRunner(
 			CommandName:  command.Plan,
 			WorkflowName: pplxManagedWorkflow,
 			BaseRepo:     models.Repo{FullName: pplxManagedRepo},
+			JobID:        diagnosticEvidenceID,
 			Log:          logging.NewNoopLogger(t),
 		}
 }

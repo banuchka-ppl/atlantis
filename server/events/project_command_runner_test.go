@@ -156,14 +156,16 @@ func TestDefaultProjectCommandRunner_PlanUsesPreferredStructuredResult(t *testin
 }
 
 func TestDefaultProjectCommandRunner_PlanRetainsPreferredStructuredError(t *testing.T) {
+	const evidenceID = "8f754d80-6f1e-44c8-a370-2f4752605d95"
 	runResult := &runtime.CompletedRun{
 		Result: runtime.StepResultV1{
 			SchemaVersion: runtime.StepResultSchemaVersion,
 			Outcome:       runtime.StepResultOutcomeError,
 			Summary:       "Terraform plan failed.",
 			Diagnostic: &runtime.StepDiagnostic{
-				Code:    models.ProjectRunDiagnosticCodeTerraformFailed,
-				Summary: "Terraform plan failed.",
+				Code:       models.ProjectRunDiagnosticCodeTerraformFailed,
+				Summary:    "Terraform plan failed.",
+				EvidenceID: evidenceID,
 			},
 		},
 		DiagnosticDetail: "typed bounded diagnostic",
@@ -185,6 +187,7 @@ func TestDefaultProjectCommandRunner_PlanRetainsPreferredStructuredError(t *test
 		result.ProjectRunResult.Diagnostic.Code,
 	)
 	Equals(t, "typed bounded diagnostic", result.ReviewerError())
+	Equals(t, evidenceID, result.ProjectRunResult.Diagnostic.EvidenceID)
 }
 
 func TestDefaultProjectCommandRunner_ApplyUsesPreferredStructuredResult(t *testing.T) {
@@ -478,6 +481,46 @@ func TestProjectOutputWrapper(t *testing.T) {
 			mockJobMessageSender.VerifyWasCalled(Times(expectedSends)).Send(Any[command.ProjectContext](), Any[string](), Any[bool]())
 		})
 	}
+}
+
+type diagnosticEvidenceURLGeneratorStub struct {
+	url string
+}
+
+func (g diagnosticEvidenceURLGeneratorStub) GenerateProjectDiagnosticEvidenceURL(command.ProjectContext) (string, error) {
+	return g.url, nil
+}
+
+func TestProjectOutputWrapperBindsServerGeneratedDiagnosticURLToExactJob(t *testing.T) {
+	RegisterMockTestingT(t)
+	const jobID = "8f754d80-6f1e-44c8-a370-2f4752605d95"
+	const diagnosticURL = "https://atlantis.example/jobs/" + jobID + "/diagnostic"
+	ctx := command.ProjectContext{
+		JobID:             jobID,
+		Log:               logging.NewNoopLogger(t),
+		SuppressJobOutput: true,
+		SuppressVCSStatus: true,
+	}
+	projectCommandRunner := mocks.NewMockProjectCommandRunner()
+	When(projectCommandRunner.Plan(ctx)).ThenReturn(command.ProjectCommandOutput{
+		Error: errors.New("operational error"),
+		ProjectRunResult: &models.ProjectRunResult{
+			Outcome: models.ProjectRunOutcomeError,
+			Diagnostic: &models.ProjectRunDiagnostic{
+				Code:       models.ProjectRunDiagnosticCodeTerraformFailed,
+				Summary:    "Terraform plan failed.",
+				EvidenceID: jobID,
+			},
+		},
+	})
+	runner := &events.ProjectOutputWrapper{
+		DiagnosticEvidenceURLGenerator: diagnosticEvidenceURLGeneratorStub{url: diagnosticURL},
+		ProjectCommandRunner:           projectCommandRunner,
+	}
+
+	result := runner.Plan(ctx)
+
+	Equals(t, diagnosticURL, result.ProjectRunResult.Diagnostic.EvidenceURL)
 }
 
 func TestProjectOutputWrapper_DefersRemoteApplyURLSuccessStatus(t *testing.T) {
