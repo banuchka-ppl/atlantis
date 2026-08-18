@@ -91,8 +91,6 @@ const (
 	commandCompletionShutdownTimeout = 10 * time.Second
 	diagnosticEvidenceS3BucketEnv    = "ATLANTIS_DIAGNOSTIC_S3_BUCKET"
 	diagnosticEvidenceS3RegionEnv    = "ATLANTIS_DIAGNOSTIC_S3_REGION"
-	plansS3BucketEnv                 = "ATLANTIS_PLANS_S3_BUCKET"
-	plansS3RegionEnv                 = "ATLANTIS_PLANS_S3_REGION"
 )
 
 // Server runs the Atlantis web server.
@@ -197,14 +195,8 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 			return nil, fmt.Errorf("configuring diagnostic evidence authentication: %w", err)
 		}
 		diagnosticBucket := strings.TrimSpace(os.Getenv(diagnosticEvidenceS3BucketEnv))
-		if diagnosticBucket == "" {
-			diagnosticBucket = strings.TrimSpace(os.Getenv(plansS3BucketEnv))
-		}
 		if diagnosticBucket != "" {
 			diagnosticRegion := strings.TrimSpace(os.Getenv(diagnosticEvidenceS3RegionEnv))
-			if diagnosticRegion == "" {
-				diagnosticRegion = strings.TrimSpace(os.Getenv(plansS3RegionEnv))
-			}
 			if diagnosticRegion == "" {
 				diagnosticRegion = "us-east-1"
 			}

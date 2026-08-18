@@ -1341,17 +1341,20 @@ and human email claim. Header presence alone is not authentication.
 If a jobs-page WebSocket closes before delivering a terminal event, the page
 requests the same job's authenticated `/diagnostic` endpoint. A retained
 filesystem log replaces any partial live buffer when available. After a local
-miss, the endpoint reads the exact `diagnostics/v1/jobs/<job-id>/` S3 log only
-when its bounded manifest matches the job ID, size, and SHA-256 digest.
+miss, the endpoint reads the exact `diagnostics/v2/jobs/<job-id>/` S3 log only
+after a create-only commit object selects an immutable content-addressed
+generation whose bounded manifest matches the job ID, generation, size, and
+SHA-256 digests.
 Authentication failures, missing or incomplete objects, and expired retention
 remain explicit unavailable states; the route never redirects to S3 or becomes
 a general job archive.
 
 The S3 reader uses `ATLANTIS_DIAGNOSTIC_S3_BUCKET` and
-`ATLANTIS_DIAGNOSTIC_S3_REGION`. During migration, an unset diagnostics bucket
-falls back to `ATLANTIS_PLANS_S3_BUCKET` and `ATLANTIS_PLANS_S3_REGION`. The
-runtime invokes the bundled AWS CLI with the pod identity and strictly
-validated bucket, region, and canonical job-ID-derived key arguments.
+`ATLANTIS_DIAGNOSTIC_S3_REGION`. An unset diagnostics bucket disables S3
+recovery; it never falls back to the plans bucket because raw provider output
+requires a dedicated least-privilege reader set. The runtime invokes the
+bundled AWS CLI with the pod identity and strictly validated bucket, region,
+and canonical job-ID-derived key arguments.
 
 ### `--pplx-diagnostic-evidence-cf-access-team-domain`
 

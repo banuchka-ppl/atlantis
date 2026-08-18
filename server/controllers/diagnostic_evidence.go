@@ -23,12 +23,13 @@ import (
 )
 
 const (
-	diagnosticEvidenceSchemaVersion = 1
-	diagnosticEvidenceIndexMaxBytes = 4 * 1024
-	diagnosticEvidenceMetaMaxBytes  = 64 * 1024
-	diagnosticEvidenceLogMaxBytes   = 8 * 1024 * 1024
-	diagnosticEvidenceS3Prefix      = "diagnostics/v1/jobs"
-	diagnosticEvidenceS3Timeout     = 10 * time.Second
+	diagnosticEvidenceIndexSchemaVersion = 1
+	diagnosticEvidenceS3SchemaVersion    = 2
+	diagnosticEvidenceIndexMaxBytes      = 4 * 1024
+	diagnosticEvidenceMetaMaxBytes       = 64 * 1024
+	diagnosticEvidenceLogMaxBytes        = 8 * 1024 * 1024
+	diagnosticEvidenceS3Prefix           = "diagnostics/v2/jobs"
+	diagnosticEvidenceS3Timeout          = 10 * time.Second
 )
 
 var errDiagnosticEvidenceUnavailable = errors.New("diagnostic evidence unavailable")
@@ -54,7 +55,15 @@ type diagnosticEvidenceMetadata struct {
 	JobID string `json:"job_id"`
 }
 
+type diagnosticEvidenceS3Commit struct {
+	Generation     string `json:"generation"`
+	JobID          string `json:"job_id"`
+	ManifestSHA256 string `json:"manifest_sha256"`
+	SchemaVersion  int    `json:"schema_version"`
+}
+
 type diagnosticEvidenceS3Manifest struct {
+	Generation    string `json:"generation"`
 	JobID         string `json:"job_id"`
 	SchemaVersion int    `json:"schema_version"`
 	SHA256        string `json:"sha256"`
@@ -112,19 +121,42 @@ func (r *diagnosticEvidenceS3Reader) Read(ctx context.Context, jobID string) ([]
 	ctx, cancel := context.WithTimeout(ctx, diagnosticEvidenceS3Timeout)
 	defer cancel()
 
-	manifestBytes, err := r.objects.GetObject(
+	commitBytes, err := r.objects.GetObject(
 		ctx,
-		diagnosticEvidenceS3Key(jobID, "manifest.json"),
+		diagnosticEvidenceS3CommitKey(jobID),
 		diagnosticEvidenceIndexMaxBytes,
 	)
 	if err != nil {
 		return nil, errDiagnosticEvidenceUnavailable
 	}
+	var commit diagnosticEvidenceS3Commit
+	if err := decodeStrictJSON(commitBytes, &commit); err != nil ||
+		commit.SchemaVersion != diagnosticEvidenceS3SchemaVersion ||
+		commit.JobID != jobID ||
+		!diagnosticEvidenceSHA256Pattern.MatchString(commit.Generation) ||
+		!diagnosticEvidenceSHA256Pattern.MatchString(commit.ManifestSHA256) {
+		return nil, errDiagnosticEvidenceUnavailable
+	}
+
+	manifestBytes, err := r.objects.GetObject(
+		ctx,
+		diagnosticEvidenceS3GenerationKey(jobID, commit.Generation, "manifest.json"),
+		diagnosticEvidenceIndexMaxBytes,
+	)
+	if err != nil {
+		return nil, errDiagnosticEvidenceUnavailable
+	}
+	manifestDigest := sha256.Sum256(manifestBytes)
+	if fmt.Sprintf("%x", manifestDigest) != commit.ManifestSHA256 {
+		return nil, errDiagnosticEvidenceUnavailable
+	}
 	var manifest diagnosticEvidenceS3Manifest
 	if err := decodeStrictJSON(manifestBytes, &manifest); err != nil ||
-		manifest.SchemaVersion != diagnosticEvidenceSchemaVersion ||
+		manifest.SchemaVersion != diagnosticEvidenceS3SchemaVersion ||
 		manifest.JobID != jobID ||
+		manifest.Generation != commit.Generation ||
 		!diagnosticEvidenceSHA256Pattern.MatchString(manifest.SHA256) ||
+		manifest.SHA256 != commit.Generation ||
 		manifest.SizeBytes < 0 ||
 		manifest.SizeBytes > diagnosticEvidenceLogMaxBytes {
 		return nil, errDiagnosticEvidenceUnavailable
@@ -132,7 +164,7 @@ func (r *diagnosticEvidenceS3Reader) Read(ctx context.Context, jobID string) ([]
 
 	evidence, err := r.objects.GetObject(
 		ctx,
-		diagnosticEvidenceS3Key(jobID, "diagnostic.log"),
+		diagnosticEvidenceS3GenerationKey(jobID, commit.Generation, "diagnostic.log"),
 		diagnosticEvidenceLogMaxBytes,
 	)
 	if err != nil || int64(len(evidence)) != manifest.SizeBytes {
@@ -187,8 +219,12 @@ func (b *boundedCommandOutput) Write(content []byte) (int, error) {
 	return written, nil
 }
 
-func diagnosticEvidenceS3Key(jobID, name string) string {
-	return path.Join(diagnosticEvidenceS3Prefix, jobID, name)
+func diagnosticEvidenceS3CommitKey(jobID string) string {
+	return path.Join(diagnosticEvidenceS3Prefix, jobID, "commit.json")
+}
+
+func diagnosticEvidenceS3GenerationKey(jobID, generation, name string) string {
+	return path.Join(diagnosticEvidenceS3Prefix, jobID, "generations", generation, name)
 }
 
 // GetProjectDiagnosticEvidence serves one exact retained run after origin authentication.
@@ -243,7 +279,7 @@ func readDiagnosticEvidence(rootPath, jobID string) ([]byte, error) {
 	}
 	var index diagnosticEvidenceIndex
 	if err := decodeStrictJSON(indexBytes, &index); err != nil ||
-		index.SchemaVersion != diagnosticEvidenceSchemaVersion ||
+		index.SchemaVersion != diagnosticEvidenceIndexSchemaVersion ||
 		index.JobID != jobID ||
 		!safeDiagnosticLogPath(index.LogPath) {
 		return nil, errDiagnosticEvidenceUnavailable
