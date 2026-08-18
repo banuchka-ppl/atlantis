@@ -163,6 +163,15 @@
         background: var(--warning);
       }
 
+      .job-status[data-status="retained"] {
+        color: var(--accent);
+        border-color: rgba(88, 214, 199, 0.28);
+      }
+
+      .job-status[data-status="retained"] .status-dot {
+        background: var(--accent);
+      }
+
       .status-divider {
         width: 1px;
         height: 14px;
@@ -372,7 +381,7 @@
 
       <section class="terminal-card" aria-label="Terraform command output">
         <div class="terminal-toolbar">
-          <span class="terminal-label">Live output</span>
+          <span id="terminal-label" class="terminal-label">Live output</span>
           <div class="toolbar-actions">
             <form id="search-form" class="search-controls" role="search">
               <input id="search-input" class="search-input" type="search" placeholder="Find in output" aria-label="Find in output" autocomplete="off">
@@ -398,6 +407,7 @@
         const statusLabel = document.getElementById("status-label");
         const elapsedTime = document.getElementById("elapsed-time");
         const emptyState = document.getElementById("empty-state");
+        const terminalLabel = document.getElementById("terminal-label");
         const searchForm = document.getElementById("search-form");
         const searchInput = document.getElementById("search-input");
         const searchPrevious = document.getElementById("search-previous");
@@ -442,7 +452,9 @@
 
         const startedAt = Date.now();
         let completionReceived = false;
+        let fallbackAttempted = false;
         let outputVisible = false;
+        let pageUnloading = false;
 
         const setStatus = (status, label) => {
           statusElement.dataset.status = status;
@@ -469,6 +481,41 @@
             emptyState.hidden = true;
           }
           terminal.write(output);
+        };
+
+        const loadRetainedOutput = async () => {
+          if (fallbackAttempted || pageUnloading) return false;
+          fallbackAttempted = true;
+          if (!outputVisible) {
+            emptyState.textContent = "Live output unavailable; loading retained output…";
+          }
+
+          try {
+            const diagnosticPath = document.location.pathname.replace(/\/$/, "") + "/diagnostic";
+            const response = await fetch(diagnosticPath, {
+              cache: "no-store",
+              credentials: "same-origin",
+              headers: { Accept: "text/plain" },
+              redirect: "error"
+            });
+            const contentType = response.headers.get("Content-Type") || "";
+            if (!response.ok || !contentType.toLowerCase().startsWith("text/plain")) {
+              return false;
+            }
+
+            const retainedOutput = await response.text();
+            terminal.reset();
+            outputVisible = false;
+            queueOutput(retainedOutput.replace(/\r?\n/g, "\r\n"));
+            terminalLabel.textContent = "Retained output";
+            window.clearInterval(elapsedTimer);
+            elapsedTime.textContent = "retained";
+            setStatus("retained", "Retained log");
+            terminal.scrollToBottom();
+            return true;
+          } catch (_error) {
+            return false;
+          }
         };
 
         const complete = (status) => {
@@ -506,10 +553,14 @@
           }
           queueOutput(decoder.decode(event.data, { stream: true }));
         });
-        socket.addEventListener("close", () => {
-          if (completionReceived) return;
+        socket.addEventListener("close", async () => {
+          if (completionReceived || pageUnloading) return;
+          if (await loadRetainedOutput()) return;
           window.clearInterval(elapsedTimer);
-          setStatus("disconnected", "Connection lost");
+          setStatus("disconnected", outputVisible ? "Connection lost" : "Output unavailable");
+          if (!outputVisible) {
+            emptyState.textContent = "Live output is unavailable and retained output could not be loaded.";
+          }
         });
 
         searchForm.addEventListener("submit", (event) => {
@@ -533,7 +584,10 @@
           }
         });
         window.addEventListener("resize", () => fitAddon.fit());
-        window.addEventListener("beforeunload", () => socket.close());
+        window.addEventListener("beforeunload", () => {
+          pageUnloading = true;
+          socket.close();
+        });
       })();
     </script>
   </body>
