@@ -32,6 +32,7 @@ type JobsController struct {
 	AtlantisVersion                 string   `validate:"required"`
 	AtlantisURL                     *url.URL `validate:"required"`
 	DiagnosticEvidenceAuthenticator DiagnosticEvidenceAuthenticator
+	DiagnosticEvidenceFallback      DiagnosticEvidenceReader
 	DiagnosticEvidenceRoot          string
 	Logger                          logging.SimpleLogging        `validate:"required"`
 	ProjectJobsTemplate             web_templates.TemplateWriter `validate:"required"`

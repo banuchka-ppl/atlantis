@@ -79,6 +79,9 @@ func TestProjectJobsTemplate(t *testing.T) {
 	Assert(t, strings.Contains(output.String(), "Terraform job"), "expected job heading")
 	Assert(t, strings.Contains(output.String(), "project path"), "expected job ID")
 	Assert(t, strings.Contains(output.String(), "Connection lost"), "expected explicit disconnect state")
+	Assert(t, strings.Contains(output.String(), `+ "/diagnostic"`), "expected retained diagnostic fallback")
+	Assert(t, strings.Contains(output.String(), "Retained output"), "expected retained output state")
+	Assert(t, strings.Contains(output.String(), `startsWith("text/plain")`), "fallback must reject non-log responses")
 	Assert(t, !strings.Contains(output.String(), "watermark"), "job viewer must not render the old watermark")
 	Assert(t, !strings.Contains(output.String(), "atlantis-icon_512"), "job viewer must not render the bottom-right logo")
 }

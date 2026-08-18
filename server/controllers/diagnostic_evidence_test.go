@@ -4,7 +4,10 @@
 package controllers
 
 import (
+	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,12 +34,38 @@ func (a diagnosticEvidenceAuthenticatorStub) Authenticate(*http.Request) error {
 	return a.err
 }
 
+type diagnosticEvidenceReaderStub struct {
+	evidence []byte
+	calls    int
+}
+
+func (r *diagnosticEvidenceReaderStub) Read(context.Context, string) ([]byte, error) {
+	r.calls++
+	return r.evidence, nil
+}
+
+type diagnosticEvidenceS3ObjectGetterStub struct {
+	objects map[string][]byte
+	keys    []string
+}
+
+func (g *diagnosticEvidenceS3ObjectGetterStub) GetObject(_ context.Context, key string, maxBytes int64) ([]byte, error) {
+	g.keys = append(g.keys, key)
+	content, ok := g.objects[key]
+	if !ok || int64(len(content)) > maxBytes {
+		return nil, errDiagnosticEvidenceUnavailable
+	}
+	return append([]byte(nil), content...), nil
+}
+
 func TestJobsController_GetProjectDiagnosticEvidenceReturnsExactAuthenticatedRun(t *testing.T) {
 	root := t.TempDir()
 	writeDiagnosticEvidence(t, root, diagnosticJobID, diagnosticLogPath, "first exact raw diagnostic\n")
 	writeDiagnosticEvidence(t, root, otherDiagnosticJobID, otherDiagnosticLogPath, "later raw diagnostic\n")
+	fallback := &diagnosticEvidenceReaderStub{evidence: []byte("fallback must not replace local evidence\n")}
 	controller := &JobsController{
 		DiagnosticEvidenceAuthenticator: diagnosticEvidenceAuthenticatorStub{},
+		DiagnosticEvidenceFallback:      fallback,
 		DiagnosticEvidenceRoot:          root,
 		KeyGenerator:                    JobIDKeyGenerator{},
 		Logger:                          logging.NewNoopLogger(t),
@@ -51,6 +80,103 @@ func TestJobsController_GetProjectDiagnosticEvidenceReturnsExactAuthenticatedRun
 	Equals(t, "default-src 'none'; sandbox", recorder.Header().Get("Content-Security-Policy"))
 	Equals(t, "nosniff", recorder.Header().Get("X-Content-Type-Options"))
 	Equals(t, "no-referrer", recorder.Header().Get("Referrer-Policy"))
+	Equals(t, 0, fallback.calls)
+}
+
+func TestJobsController_GetProjectDiagnosticEvidenceFallsBackToExactS3Run(t *testing.T) {
+	evidence := []byte("S3 exact raw diagnostic\n")
+	digest := sha256.Sum256(evidence)
+	manifest := []byte(fmt.Sprintf(
+		`{"job_id":"%s","schema_version":1,"sha256":"%x","size_bytes":%d}`,
+		diagnosticJobID,
+		digest,
+		len(evidence),
+	))
+	getter := &diagnosticEvidenceS3ObjectGetterStub{objects: map[string][]byte{
+		diagnosticEvidenceS3Key(diagnosticJobID, "manifest.json"):  manifest,
+		diagnosticEvidenceS3Key(diagnosticJobID, "diagnostic.log"): evidence,
+	}}
+	controller := &JobsController{
+		DiagnosticEvidenceAuthenticator: diagnosticEvidenceAuthenticatorStub{},
+		DiagnosticEvidenceFallback: &diagnosticEvidenceS3Reader{
+			objects: getter,
+		},
+		DiagnosticEvidenceRoot: t.TempDir(),
+		KeyGenerator:           JobIDKeyGenerator{},
+		Logger:                 logging.NewNoopLogger(t),
+	}
+
+	recorder := requestDiagnosticEvidence(controller, diagnosticJobID)
+
+	Equals(t, http.StatusOK, recorder.Code)
+	Equals(t, string(evidence), recorder.Body.String())
+	Equals(t, []string{
+		diagnosticEvidenceS3Key(diagnosticJobID, "manifest.json"),
+		diagnosticEvidenceS3Key(diagnosticJobID, "diagnostic.log"),
+	}, getter.keys)
+}
+
+func TestJobsController_GetProjectDiagnosticEvidenceRejectsCorruptS3Run(t *testing.T) {
+	evidence := []byte("raw diagnostic must not leak\n")
+	manifest := []byte(fmt.Sprintf(
+		`{"job_id":"%s","schema_version":1,"sha256":"%064d","size_bytes":%d}`,
+		diagnosticJobID,
+		0,
+		len(evidence),
+	))
+	getter := &diagnosticEvidenceS3ObjectGetterStub{objects: map[string][]byte{
+		diagnosticEvidenceS3Key(diagnosticJobID, "manifest.json"):  manifest,
+		diagnosticEvidenceS3Key(diagnosticJobID, "diagnostic.log"): evidence,
+	}}
+	controller := &JobsController{
+		DiagnosticEvidenceAuthenticator: diagnosticEvidenceAuthenticatorStub{},
+		DiagnosticEvidenceFallback: &diagnosticEvidenceS3Reader{
+			objects: getter,
+		},
+		DiagnosticEvidenceRoot: t.TempDir(),
+		KeyGenerator:           JobIDKeyGenerator{},
+		Logger:                 logging.NewNoopLogger(t),
+	}
+
+	recorder := requestDiagnosticEvidence(controller, diagnosticJobID)
+
+	Equals(t, http.StatusNotFound, recorder.Code)
+	Assert(t, recorder.Body.String() != string(evidence), "corrupt S3 evidence leaked")
+}
+
+func TestNewS3DiagnosticEvidenceReaderValidatesCLIArguments(t *testing.T) {
+	tests := []struct {
+		name    string
+		bucket  string
+		region  string
+		wantErr bool
+	}{
+		{name: "valid", bucket: "agi-sandbox-atlantis-plans-sbox-use1", region: "us-east-1"},
+		{name: "option-like bucket", bucket: "--endpoint-url", region: "us-east-1", wantErr: true},
+		{name: "ambiguous bucket", bucket: "logs..example", region: "us-east-1", wantErr: true},
+		{name: "option-like region", bucket: "logs-example", region: "--profile", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewS3DiagnosticEvidenceReader(test.bucket, test.region)
+
+			Equals(t, test.wantErr, err != nil)
+		})
+	}
+}
+
+func TestBoundedCommandOutputDiscardsOverflowWithoutGrowing(t *testing.T) {
+	output := &boundedCommandOutput{limit: 5}
+
+	firstWritten, firstErr := output.Write([]byte("abc"))
+	secondWritten, secondErr := output.Write([]byte("defgh"))
+
+	Equals(t, 3, firstWritten)
+	Equals(t, 5, secondWritten)
+	Ok(t, firstErr)
+	Ok(t, secondErr)
+	Equals(t, "abcde", output.content.String())
+	Assert(t, output.overflow, "expected output exceeding the cap to be rejected")
 }
 
 func TestJobsController_GetProjectDiagnosticEvidenceFailsClosed(t *testing.T) {
