@@ -49,6 +49,13 @@ type diagnosticEvidenceS3ObjectGetterStub struct {
 	keys    []string
 }
 
+type diagnosticEvidenceS3Fixture struct {
+	objects     map[string][]byte
+	commitKey   string
+	manifestKey string
+	logKey      string
+}
+
 func (g *diagnosticEvidenceS3ObjectGetterStub) GetObject(_ context.Context, key string, maxBytes int64) ([]byte, error) {
 	g.keys = append(g.keys, key)
 	content, ok := g.objects[key]
@@ -56,6 +63,38 @@ func (g *diagnosticEvidenceS3ObjectGetterStub) GetObject(_ context.Context, key 
 		return nil, errDiagnosticEvidenceUnavailable
 	}
 	return append([]byte(nil), content...), nil
+}
+
+func newDiagnosticEvidenceS3Fixture(evidence []byte) diagnosticEvidenceS3Fixture {
+	generationDigest := sha256.Sum256(evidence)
+	generation := fmt.Sprintf("%x", generationDigest)
+	manifest := []byte(fmt.Sprintf(
+		`{"generation":"%s","job_id":"%s","schema_version":2,"sha256":"%s","size_bytes":%d}`+"\n",
+		generation,
+		diagnosticJobID,
+		generation,
+		len(evidence),
+	))
+	manifestDigest := sha256.Sum256(manifest)
+	commit := []byte(fmt.Sprintf(
+		`{"generation":"%s","job_id":"%s","manifest_sha256":"%x","schema_version":2}`+"\n",
+		generation,
+		diagnosticJobID,
+		manifestDigest,
+	))
+	commitKey := diagnosticEvidenceS3CommitKey(diagnosticJobID)
+	manifestKey := diagnosticEvidenceS3GenerationKey(diagnosticJobID, generation, "manifest.json")
+	logKey := diagnosticEvidenceS3GenerationKey(diagnosticJobID, generation, "diagnostic.log")
+	return diagnosticEvidenceS3Fixture{
+		objects: map[string][]byte{
+			commitKey:   commit,
+			manifestKey: manifest,
+			logKey:      evidence,
+		},
+		commitKey:   commitKey,
+		manifestKey: manifestKey,
+		logKey:      logKey,
+	}
 }
 
 func TestJobsController_GetProjectDiagnosticEvidenceReturnsExactAuthenticatedRun(t *testing.T) {
@@ -85,17 +124,8 @@ func TestJobsController_GetProjectDiagnosticEvidenceReturnsExactAuthenticatedRun
 
 func TestJobsController_GetProjectDiagnosticEvidenceFallsBackToExactS3Run(t *testing.T) {
 	evidence := []byte("S3 exact raw diagnostic\n")
-	digest := sha256.Sum256(evidence)
-	manifest := []byte(fmt.Sprintf(
-		`{"job_id":"%s","schema_version":1,"sha256":"%x","size_bytes":%d}`,
-		diagnosticJobID,
-		digest,
-		len(evidence),
-	))
-	getter := &diagnosticEvidenceS3ObjectGetterStub{objects: map[string][]byte{
-		diagnosticEvidenceS3Key(diagnosticJobID, "manifest.json"):  manifest,
-		diagnosticEvidenceS3Key(diagnosticJobID, "diagnostic.log"): evidence,
-	}}
+	fixture := newDiagnosticEvidenceS3Fixture(evidence)
+	getter := &diagnosticEvidenceS3ObjectGetterStub{objects: fixture.objects}
 	controller := &JobsController{
 		DiagnosticEvidenceAuthenticator: diagnosticEvidenceAuthenticatorStub{},
 		DiagnosticEvidenceFallback: &diagnosticEvidenceS3Reader{
@@ -111,37 +141,83 @@ func TestJobsController_GetProjectDiagnosticEvidenceFallsBackToExactS3Run(t *tes
 	Equals(t, http.StatusOK, recorder.Code)
 	Equals(t, string(evidence), recorder.Body.String())
 	Equals(t, []string{
-		diagnosticEvidenceS3Key(diagnosticJobID, "manifest.json"),
-		diagnosticEvidenceS3Key(diagnosticJobID, "diagnostic.log"),
+		fixture.commitKey,
+		fixture.manifestKey,
+		fixture.logKey,
 	}, getter.keys)
 }
 
-func TestJobsController_GetProjectDiagnosticEvidenceRejectsCorruptS3Run(t *testing.T) {
+func TestJobsController_GetProjectDiagnosticEvidenceRejectsIncompleteOrCrossPairedS3Run(t *testing.T) {
 	evidence := []byte("raw diagnostic must not leak\n")
-	manifest := []byte(fmt.Sprintf(
-		`{"job_id":"%s","schema_version":1,"sha256":"%064d","size_bytes":%d}`,
-		diagnosticJobID,
-		0,
-		len(evidence),
-	))
-	getter := &diagnosticEvidenceS3ObjectGetterStub{objects: map[string][]byte{
-		diagnosticEvidenceS3Key(diagnosticJobID, "manifest.json"):  manifest,
-		diagnosticEvidenceS3Key(diagnosticJobID, "diagnostic.log"): evidence,
-	}}
-	controller := &JobsController{
-		DiagnosticEvidenceAuthenticator: diagnosticEvidenceAuthenticatorStub{},
-		DiagnosticEvidenceFallback: &diagnosticEvidenceS3Reader{
-			objects: getter,
+	tests := []struct {
+		name   string
+		mutate func(fixture diagnosticEvidenceS3Fixture)
+	}{
+		{
+			name: "partial log",
+			mutate: func(fixture diagnosticEvidenceS3Fixture) {
+				fixture.objects[fixture.logKey] = evidence[:len(evidence)-1]
+			},
 		},
-		DiagnosticEvidenceRoot: t.TempDir(),
-		KeyGenerator:           JobIDKeyGenerator{},
-		Logger:                 logging.NewNoopLogger(t),
+		{
+			name: "partial manifest",
+			mutate: func(fixture diagnosticEvidenceS3Fixture) {
+				manifest := fixture.objects[fixture.manifestKey]
+				fixture.objects[fixture.manifestKey] = manifest[:len(manifest)-1]
+			},
+		},
+		{
+			name: "cross-paired manifest",
+			mutate: func(fixture diagnosticEvidenceS3Fixture) {
+				other := newDiagnosticEvidenceS3Fixture([]byte("other generation\n"))
+				fixture.objects[fixture.manifestKey] = other.objects[other.manifestKey]
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDiagnosticEvidenceS3Fixture(evidence)
+			test.mutate(fixture)
+			controller := &JobsController{
+				DiagnosticEvidenceAuthenticator: diagnosticEvidenceAuthenticatorStub{},
+				DiagnosticEvidenceFallback: &diagnosticEvidenceS3Reader{
+					objects: &diagnosticEvidenceS3ObjectGetterStub{objects: fixture.objects},
+				},
+				DiagnosticEvidenceRoot: t.TempDir(),
+				KeyGenerator:           JobIDKeyGenerator{},
+				Logger:                 logging.NewNoopLogger(t),
+			}
+
+			recorder := requestDiagnosticEvidence(controller, diagnosticJobID)
+
+			Equals(t, http.StatusNotFound, recorder.Code)
+			Assert(t, recorder.Body.String() != string(evidence), "invalid S3 evidence leaked")
+		})
+	}
+}
+
+func TestDiagnosticEvidenceS3ReaderCommitIsTheOnlyVisibilityPoint(t *testing.T) {
+	evidence := []byte("committed diagnostic\n")
+	fixture := newDiagnosticEvidenceS3Fixture(evidence)
+	stagedObjects := make(map[string][]byte)
+	reader := &diagnosticEvidenceS3Reader{
+		objects: &diagnosticEvidenceS3ObjectGetterStub{objects: stagedObjects},
 	}
 
-	recorder := requestDiagnosticEvidence(controller, diagnosticJobID)
+	_, err := reader.Read(context.Background(), diagnosticJobID)
+	Assert(t, err != nil, "empty generation was readable")
+	stagedObjects[fixture.logKey] = fixture.objects[fixture.logKey]
+	_, err = reader.Read(context.Background(), diagnosticJobID)
+	Assert(t, err != nil, "log-only generation was readable")
+	stagedObjects[fixture.manifestKey] = fixture.objects[fixture.manifestKey]
+	_, err = reader.Read(context.Background(), diagnosticJobID)
+	Assert(t, err != nil, "uncommitted generation was readable")
+	stagedObjects[fixture.commitKey] = fixture.objects[fixture.commitKey]
 
-	Equals(t, http.StatusNotFound, recorder.Code)
-	Assert(t, recorder.Body.String() != string(evidence), "corrupt S3 evidence leaked")
+	actual, err := reader.Read(context.Background(), diagnosticJobID)
+
+	Ok(t, err)
+	Equals(t, string(evidence), string(actual))
 }
 
 func TestNewS3DiagnosticEvidenceReaderValidatesCLIArguments(t *testing.T) {
